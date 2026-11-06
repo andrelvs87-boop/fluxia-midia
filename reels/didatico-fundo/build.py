@@ -12,6 +12,7 @@ chatting") and not a decoration laid over a photo.
 Contract with reelkit: build(track, drop_s) -> plan dict.
 """
 import json
+import shutil
 import math
 import os
 import random
@@ -65,12 +66,13 @@ def _quebrar(txt, fs, wmax):
     return linhas
 
 
-def _big_geometria(txt, fs_pedido):
+def _big_geometria(txt, fs_pedido, wcampo=None):
     """Reduz a fonte ate caber e devolve (fonte, linhas, altura_da_caixa)."""
     fs = int(fs_pedido)
     while fs > 36:
-        linhas = _quebrar(txt, fs, _CAMPO_LARG / _PUSH)
-        if all(_larg(l, fs) * _PUSH <= _CAMPO_LARG for l in linhas):
+        _W = _CAMPO_LARG if wcampo is None else wcampo
+        linhas = _quebrar(txt, fs, _W / _PUSH)
+        if all(_larg(l, fs) * _PUSH <= _W for l in linhas):
             return fs, linhas, int(fs * 0.86 * len(linhas)) + 34
         fs -= 2
     linhas = _quebrar(txt, 36, _CAMPO_LARG / _PUSH)
@@ -165,6 +167,8 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:__BG__}
   object-fit:cover;
   filter:grayscale(.92) brightness(.42) contrast(1.12) blur(1.4px);
   transform:scale(1.06)}
+.clipfoto{position:absolute;inset:0;width:1080px;height:1920px;object-fit:cover;
+  opacity:0;filter:grayscale(1) contrast(1.08) brightness(.62)}
 #grid{position:absolute;left:0;right:0;top:0;height:1340px;
   background-image:linear-gradient(__GRID__ 1px,transparent 1px),
                    linear-gradient(90deg,__GRID__ 1px,transparent 1px);
@@ -179,8 +183,15 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:__BG__}
   background:rgba(5,14,20,.80);border:2px solid rgba(150,205,225,.16);
   border-radius:30px;box-shadow:0 30px 90px rgba(0,0,0,.62),
   inset 0 0 90px rgba(0,0,0,.45);z-index:1;opacity:0;pointer-events:none}
-.grp{position:absolute;left:96px;right:96px;top:0;height:100%;
+.grp{position:absolute;left:96px;right:96px;top:26px;height:calc(100% - 60px);   /* respiro: nem a entrada nem o encolhimento tocam a borda da caixa */
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:88px}
+/* dois elementos lado a lado, com peso editorial */
+.grp-split{display:grid;grid-template-columns:1fr 1fr;gap:44px;
+  align-items:center;justify-items:center}
+/* um dominante no centro, o segundo pequeno no canto de baixo */
+.grp-focus{display:grid;grid-template-columns:1fr;align-items:center;justify-items:center}
+.grp-focus > *:nth-child(2){position:absolute;right:-6px;bottom:34px;
+  transform:scale(.40);transform-origin:100% 100%;opacity:.92}
 
 /* caption band: its own plate, never behind a graphic */
 #capband{position:absolute;left:48px;right:48px;top:__CT__px;height:__CH__px;
@@ -190,7 +201,8 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:__BG__}
 #caprule{position:absolute;left:70px;right:70px;top:__CT__px;height:2px;
   background:linear-gradient(90deg,transparent,__ACCENT__,transparent);opacity:.5}
 .cap{position:absolute;left:64px;right:64px;top:__CT__px;height:__CH__px;
-  display:flex;align-items:center;justify-content:center;
+  display:flex;flex-wrap:wrap;align-content:center;align-items:center;
+  justify-content:center;row-gap:0;
   font-family:G;font-weight:700;font-size:62px;line-height:1.14;letter-spacing:-.015em;
   color:__INK__;text-align:center;opacity:0;text-shadow:0 4px 30px rgba(0,0,0,.9)}
 .cap .w{display:inline-block;opacity:.30;margin-right:.26em}
@@ -274,6 +286,22 @@ html,body{width:1080px;height:1920px;overflow:hidden;background:__BG__}
   text-shadow:0 0 34px rgba(32,240,240,.4)}
 .nlabel{position:absolute;font-family:M;font-size:20px;color:__DIM__;letter-spacing:.12em;
   white-space:nowrap}
+/* icone generico */
+.icone{position:relative;display:flex;flex-direction:column;align-items:center;gap:24px}
+.icone .ico-art{width:156px;height:156px}
+.icone .ic{width:156px;height:156px;stroke:__ACCENT__;stroke-width:1.2;fill:none}
+.icone .ico-lab{font-family:M;font-size:23px;letter-spacing:.22em;color:__INK__;
+  text-align:center;line-height:1.4}
+/* numero grande */
+.stat{position:relative;display:flex;flex-direction:column;align-items:center;gap:10px}
+.stat .sval{display:flex;align-items:baseline;gap:14px}
+.stat .sv{font-family:G;font-weight:800;font-size:170px;letter-spacing:-.05em;
+  color:__INK__;line-height:.9;text-shadow:0 10px 60px rgba(0,0,0,.9)}
+.stat .su{font-family:M;font-weight:700;font-size:46px;color:__ACCENT__;
+  letter-spacing:.02em;opacity:0}
+.stat .sval.embaixo{flex-direction:column;align-items:center;gap:4px}
+.stat .slab{font-family:M;font-size:22px;letter-spacing:.2em;color:__DIM__;
+  text-align:center;text-transform:uppercase}
 svg.art{position:absolute;left:0;top:0;width:100%;height:100%;overflow:visible}
 svg.art .ln{stroke:__ACCENT__;stroke-width:2.4;fill:none}
 svg.art .ax{stroke:rgba(140,200,220,.45);stroke-width:1.6}
@@ -362,6 +390,13 @@ def build(track=None, drop_s=0.0):
     words, voice_end, _ = load()
     at = timer(words)
     b = load_beats()
+    _icones = sorted({ic.get("name") for sc in b.get("scenes", [])
+                      for ic in sc.get("icon", []) if ic.get("name")})
+    for _nm in (_icones or []):
+        try:
+            rk.ensure_icons([_nm])
+        except Exception:
+            pass        # nome inexistente no Lucide nao pode derrubar o build
     cta = b.get("cta", {})
     hold = float(cta.get("hold", CTA_HOLD))
     duration = round(voice_end + hold, 3)
@@ -369,6 +404,19 @@ def build(track=None, drop_s=0.0):
     # ---------- fundo de video (opcional, so nas variantes)
     bgv = b.get("bgv", [])
     bgv_html = ""
+    # fundo por FOTO (o bgv so aceita video): ken-burns lento por cima do fundo
+    for _bi, _fb in enumerate(b.get("fotofundo", [])):
+        _src = Path(_fb["src"])
+        if not _src.exists():
+            _hit = list((WORK / "assets").rglob(_src.name))
+            _src = _hit[0] if _hit else _src
+        _dst = WORK / "composition/assets" / f"fbg{_bi}{_src.suffix}"
+        _dst.parent.mkdir(parents=True, exist_ok=True)
+        if not _dst.exists():
+            shutil.copyfile(_src, _dst)
+        bgv_html += (f'<img class="clipfoto" id="fbg{_bi}" src="assets/{_dst.name}" '
+                     f'data-start="{_fb.get("start", 0)}" '
+                     f'data-duration="{_fb.get("dur", 5)}">')
     for bi, bg in enumerate(bgv):
         dur = float(bg.get("dur", 4.1))
         bgv_html += (f'<video id="bgv{bi}" class="clip" src="{bg["src"]}" data-start="{bg.get("start", 0)}" '
@@ -376,6 +424,15 @@ def build(track=None, drop_s=0.0):
                      f'muted playsinline preload="auto"></video>')
 
     layer_html, stack_html, cap_html, js, sound = [], [], [], [], []
+
+    # as fotos de fundo entram com ken-burns lento e se cruzam sem corte seco
+    for _bi, _fb in enumerate(b.get("fotofundo", [])):
+        _fi = float(_fb.get("start", 0.0))
+        _fd = float(_fb.get("dur", 5.0))
+        js.append(f"TO('#fbg{_bi}',{{opacity:{_fb.get('op', 0.5)},duration:.7}},{_fi:.3f});")
+        js.append(f"TO('#fbg{_bi}',{{scale:1.1,duration:{max(0.5, _fd + 0.7):.2f},"
+                  f"ease:'none'}},{_fi:.3f});")
+        js.append(f"TO('#fbg{_bi}',{{opacity:0,duration:.7}},{_fi + _fd:.3f});")
 
     def sfx(t, cat, gain, ctx, length=None):
         ev = {"time": round(max(0.0, t), 3), "category": cat, "gain_db": gain, "context": ctx}
@@ -393,12 +450,29 @@ def build(track=None, drop_s=0.0):
 
     cap_groups = []
 
+    _SHRINK_N = [0]        # alterna o canto do elemento que encolhe
+
+    # Chamamento direto (Contador, Investidor, Empregador...) SEMPRE vira big text
+    # na abertura: e a primeira palavra do video e precisa ser lida, nao so ouvida.
+    _voc = b.get("vocativo")
+    if _voc and scenes:
+        _v = str(_voc).upper()
+        _ja = any(isinstance(x, dict) and str(x.get("text", "")).upper() == _v
+                  for x in scenes[0].get("big", []))
+        if not _ja:
+            scenes[0].setdefault("big", [])
+            scenes[0]["big"].insert(0, {
+                "text": _v, "at": 0.0,
+                "size": int(b.get("vocativo_size", 170)),
+                "shrink": b.get("vocativo_shrink", {"at": 1.30, "scale": 0.34})})
+
     for i, s in enumerate(scenes):
         t0 = starts[i]
         t1 = starts[i + 1] if i + 1 < len(starts) else voice_end + 0.12
 
         # cada cena ganha o seu grupo centrado
-        stack_html.append(f'<div class="grp" id="grp{i}" style="opacity:0">')
+        _lay = s.get("layout", "stack")
+        stack_html.append(f'<div class="grp grp-{_lay}" id="grp{i}" style="opacity:0">')
         js.append(f"TO('#grp{i}',{{opacity:1,duration:.18}},{t0:.3f});")
         js.append(f"TO('#grp{i}',{{opacity:0,duration:.16}},{t1:.3f});")
         # camera: push-in continuo em toda a cena (dinamismo sem competir com o elemento)
@@ -485,11 +559,22 @@ def build(track=None, drop_s=0.0):
 
         # ---------- big keyword
         for k, bw in enumerate(s.get("big", [])):
-            bt = max(t0, at(bw, t0))
-            _txt = str(bw[0]).upper()
+            # aceita ["TEXTO", 0] (ancora na propria palavra) ou
+            # {"text", "at", "size", "shrink"} para controle fino
+            if isinstance(bw, dict):
+                _atb = bw.get("at")
+                bt = max(t0, t0 if _atb is None else at(_atb, t0))
+                _txt = str(bw.get("text", "")).upper()
+                _bsz = int(bw.get("size", s.get("big_size", 150)))
+            else:
+                bt = max(t0, at(bw, t0))
+                _txt = str(bw[0]).upper()
+                _bsz = int(s.get("big_size", 150))
             # fonte e altura saem da MEDICAO real: fonte que nao cabe na largura
             # e reduzida, e a altura conta as linhas que realmente quebram
-            fs, _linhas_txt, _altura = _big_geometria(_txt, s.get("big_size", 150))
+            # no split a coluna tem metade do campo: a fonte tem de caber nela
+            _larg_campo = (888 - 44) / 2 if _lay == "split" else 888
+            fs, _linhas_txt, _altura = _big_geometria(_txt, _bsz, _larg_campo)
             stack_html.append(
                 f'<div class="big" id="bw{i}-{k}" style="font-size:{fs}px;'
                 f'height:{_altura}px;opacity:0">'
@@ -498,12 +583,16 @@ def build(track=None, drop_s=0.0):
             js.append(f"FT('#bw{i}-{k}',{{opacity:0,y:34,scale:1.14}},{{opacity:1,y:0,scale:1,"
                       f"duration:.46,ease:'expo.out'}},{bt:.3f});")
             js.append(f"TO('#bwu{i}-{k}',{{scaleX:1,duration:.5,ease:'power3.inOut'}},{bt + 0.16:.3f});")
-            # se este big vai MINIMIZAR em vez de sair, nao apagar no fim
+            # se este big vai MINIMIZAR/ENCOLHER em vez de sair, nao apagar agora
             _minim = any(int(m.get("index", 0)) == k and
                          int(m.get("scene", i)) == i and m.get("target", "big") == "big"
                          for m in s.get("minimize", []))
-            if not _minim:
-                js.append(f"TO('#bw{i}-{k}',{{opacity:0,y:-26,duration:.34}},{bt + 1.9:.3f});")
+            _encolhe = isinstance(bw, dict) and bw.get("shrink")
+            if not _minim and not _encolhe:
+                # antes morria em bt+1,9 s e abria buraco no meio da cena;
+                # agora vive ate o fim da cena, que e quem manda no corte
+                _fim = max(bt + 0.7, t1 - 0.12)
+                js.append(f"TO('#bw{i}-{k}',{{opacity:0,y:-26,duration:.34}},{_fim:.3f});")
             sfx(bt, "bass_impact", -29, "palavra chave")
 
         # ---------- loading / progress
@@ -1094,6 +1183,107 @@ def build(track=None, drop_s=0.0):
             js.append(f"TO('#lb{i}-{k}',{{opacity:1,duration:0.3}},{lbt:.3f});")
             js.append(f"TO('#lb{i}-{k}',{{opacity:0,duration:.3}},{min(t1, lbt + 2.2):.3f});")
 
+
+        # ---------- icone generico (qualquer Lucide + rotulo)
+        for k, icn in enumerate(s.get("icon", [])):
+            ict = max(t0, at(icn.get("at"), t0))
+            _nm = icn.get("name", "circle-dot")
+            try:
+                _svg = rk.icon(_nm, "ic")
+            except Exception:
+                _svg = rk.icon("circle-dot", "ic")   # fallback
+            stack_html.append(
+                f'<div class="icone" id="ico{i}-{k}" style="opacity:0">'
+                f'<div class="ico-art">{_svg}</div>'
+                f'<div class="ico-lab">{icn.get("label", "")}</div></div>')
+            js.append(f"FT('#ico{i}-{k}',{{opacity:0,scale:.72,rotation:-6}},"
+                      f"{{opacity:1,scale:1,rotation:0,duration:.5,ease:'expo.out'}},{ict:.3f});")
+            js.append(f"TO('#ico{i}-{k} .ic',{{strokeWidth:2.1,"
+                      f"dropShadow:'0 0 26px {ACCENT}',duration:.45}},{ict + .12:.3f});")
+            js.append(f"TO('#ico{i}-{k} .ic',{{strokeWidth:1.2,"
+                      f"dropShadow:'none',duration:.6}},{ict + .6:.3f});")
+            sfx(ict, "page_turn", -33, "icone")
+            _minim_ic = any(m.get("target") == "icon" and int(m.get("index", 0)) == k
+                            and int(m.get("scene", i)) == i for m in s.get("minimize", []))
+            if not _minim_ic:
+                # vive ate o fim da cena (antes morria em +2,4 s e abria buraco)
+                js.append(f"TO('#ico{i}-{k}',{{opacity:0,scale:.9,duration:.3}},"
+                          f"{max(ict + 0.8, t1 - 0.12):.3f});")
+
+        # ---------- numero grande (valor + unidade + rotulo)
+        for k, stt in enumerate(s.get("stat", [])):
+            stt_t = max(t0, at(stt.get("at"), t0))
+            _val = stt.get("value", "")
+            _num = None
+            try:
+                _num = float(str(_val).replace(".", "").replace(",", "."))
+            except Exception:
+                _num = None
+            # mede o valor E a unidade com a fonte real. Se os dois nao couberem lado
+            # a lado, a unidade desce para a linha de baixo e o valor fica grande —
+            # antes "MILHARES" + unidade estourava as duas bordas do campo
+            _uni = str(stt.get("unit", ""))
+            _lag_uni = (_larg(_uni, 46) * 1.05) if _uni else 0.0
+            _lado_a_lado = (_larg(str(_val), 150) + _lag_uni + 14.0) <= 856.0
+            _orcamento = (888.0 - _lag_uni - 26.0) if _lado_a_lado else 856.0
+            _orcamento = max(180.0, _orcamento)
+            _fsv = 170.0
+            while _fsv > 40 and _larg(str(_val), _fsv) * 1.02 > _orcamento:
+                _fsv *= 0.95
+            _cls_sval = "sval" if _lado_a_lado else "sval embaixo"
+            stack_html.append(
+                f'<div class="stat" id="sta{i}-{k}" style="opacity:0">'
+                f'<div class="{_cls_sval}"><span class="sv" id="sva{i}-{k}" '
+                f'style="font-size:{_fsv:.0f}px">'
+                f'{"0" if _num is not None else _val}</span>'
+                f'<span class="su">{_uni}</span></div>'
+                f'<div class="slab">{stt.get("label", "")}</div></div>')
+            js.append(f"FT('#sta{i}-{k}',{{opacity:0,y:30}},"
+                      f"{{opacity:1,y:0,duration:.4,ease:'expo.out'}},{stt_t:.3f});")
+            if _num is not None:
+                js.append(f"tl.to('#sva{i}-{k}',{{innerText:{_num},snap:{{innerText:1}},"
+                          f"duration:.9,ease:'power2.out'}},{stt_t + .1:.3f});")
+            js.append(f"TO('#sta{i}-{k} .su',{{opacity:1,duration:.3}},{stt_t + .55:.3f});")
+            sfx(stt_t, "pop", -27, "numero")
+
+
+        # ---------- coreografia: elemento encolhe para o canto e a cena segue
+        def _shrink_de(sel, sh, _i=i):
+            _n = _SHRINK_N[0]
+            _SHRINK_N[0] += 1
+            _k = float(sh.get("scale", 0.34))
+            _esq = (_n % 2) == 0
+            # a caixa (#plate) comeca 24 px abaixo do campo: y tem de ser MAIOR que
+            # isso, senao o elemento encolhido pousa fora da caixa por cima.
+            # x fica para dentro do grupo (96..984), nao colado na borda.
+            _x = float(sh.get("x", 70 if _esq else 480))
+            _y = float(sh.get("y", 52))
+            _st = max(t0, at(sh.get("at"), t0))
+            # sem o tempo no S(), o elemento vira absoluto no instante ZERO e nasce
+            # colado no topo em vez de entrar centralizado — tem de virar absoluto
+            # so no momento de encolher
+            js.append(f"S('{sel}',{{position:'absolute',left:0,top:0,"
+                      f"transformOrigin:'0 0'}},{_st:.3f});")
+            js.append(f"TO('{sel}',{{scale:{_k},x:{_x},y:{_y},duration:.62,"
+                      f"ease:'power3.inOut'}},{_st:.3f});")
+            sfx(_st, "whoosh", -33, "encolhe")
+
+        for _k2, _bw in enumerate(s.get("big", [])):
+            if isinstance(_bw, dict) and _bw.get("shrink"):
+                _shrink_de(f"#bw{i}-{_k2}", _bw["shrink"])
+        for _k2, _st2 in enumerate(s.get("stat", [])):
+            if isinstance(_st2, dict) and _st2.get("shrink"):
+                _shrink_de(f"#sta{i}-{_k2}", _st2["shrink"])
+        for _k2, _ic in enumerate(s.get("icon", [])):
+            if isinstance(_ic, dict) and _ic.get("shrink"):
+                _shrink_de(f"#ico{i}-{_k2}", _ic["shrink"])
+        for _k2, _pn in enumerate(s.get("panel", [])):
+            if isinstance(_pn, dict) and _pn.get("shrink"):
+                _shrink_de(f"#pn{i}-{_k2}", _pn["shrink"])
+        for _j2, _cd in enumerate(s.get("cards", [])):
+            if isinstance(_cd, dict) and _cd.get("shrink"):
+                _shrink_de(f"#c{i}-{_j2}", _cd["shrink"])
+
         stack_html.append('</div>')   # fecha o grupo da cena
 
     body = ('<div id="field"><div id="plate"></div>' + "".join(layer_html) +
@@ -1121,7 +1311,21 @@ def build(track=None, drop_s=0.0):
                 c1 = math.floor(c1 * 1000) / 1000
             spans = "".join(f'<span class="w" id="cw{gi}-{wi}">{w["word"]}</span>'
                             for wi, w in enumerate(g))
-            cap_html.append(f'<div class="cap" id="cap{gi}">{spans}</div>')
+            # a legenda tem caixa propria (952 px uteis, 196 px de altura = 2 linhas
+            # a 62 px). Se o texto nao couber em 2 linhas, reduz a fonte ate caber —
+            # antes ela vazava pelos lados porque o flex nao quebrava linha.
+            _fs = 62.0
+            while _fs > 34:
+                _larg_tot = sum(_larg(w["word"], _fs) * 1.26 for w in g)
+                _linhas = max(1, math.ceil(_larg_tot / 940.0))
+                _maior = max(_larg(w["word"], _fs) for w in g)
+                if _linhas <= 2 and _maior <= 940:
+                    break
+                _fs -= 2.0
+            _estilo_cap = f"font-size:{_fs:.0f}px" if _fs < 62 else ""
+            cap_html.append(f'<div class="cap" id="cap{gi}"'
+                            f'{f" style={chr(34)}{_estilo_cap}{chr(34)}" if _estilo_cap else ""}>'
+                            f'{spans}</div>')
             js.append(f"TO('#cap{gi}',{{opacity:1,duration:.1}},{c0:.3f});")
             js.append(f"TO('#cap{gi}',{{opacity:0,duration:.12}},{c1:.3f});")
             for wi, w in enumerate(g):
@@ -1191,7 +1395,10 @@ def build(track=None, drop_s=0.0):
     plan = {"style": "console", "duration": duration, "voice_end": voice_end, "keys": keys,
             "captions": cap_groups, "sound_events": sorted(sound, key=lambda e: e["time"]),
             "music": music, "mix": "presence", "duck_open": [],
-            "allowed_numbers": b.get("allowed_numbers", [])}
+            "allowed_numbers": b.get("allowed_numbers", []),
+            # pausa dramatica declarada no roteiro: sobe o limite do teste de
+            # dead air. Sem declarar, qualquer silencio acima de 0,45 s reprova.
+            **({"max_gap_s": float(b["max_gap_s"])} if b.get("max_gap_s") else {})}
     if b.get("max_duration"):
         plan["max_duration"] = b["max_duration"]
     (WORK / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2))

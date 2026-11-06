@@ -1,0 +1,1201 @@
+"""Style `console`: creative mode for a voice-over (audio only, no speaker on camera).
+
+Layout is built on TWO DISJOINT ZONES, and nothing ever crosses the border:
+  - the ELEMENT FIELD (y 300 .. 1330): cards, charts, diagrams, big keywords
+  - the CAPTION BAND (y 1352 .. 1548): the captions live on their own plate,
+    bigger and always legible, never behind any graphic
+
+Every sentence becomes an event drawn from what the sentence means (a loading bar for
+"potential", an iceberg for "only the surface", a struck-through list for "it is not about
+chatting") and not a decoration laid over a photo.
+
+Contract with reelkit: build(track, drop_s) -> plan dict.
+"""
+import json
+import math
+import os
+import random
+from pathlib import Path
+
+import reelkit as rk
+from PIL import Image
+
+# ---------- medicao real de texto (fonte do .big) ----------------------------
+# O .big usa Geist peso 800 com letter-spacing -0,045em. A altura da caixa TEM
+# de sair da quebra real, e a largura tem de caber mesmo com o push-in da camera
+# (scale ate 1.045), senao as letras sao comidas pelo overflow:hidden.
+from PIL import ImageFont as _IF
+
+_GEIST = Path.home() / ".heditor/assets/fonts/Geist-VF.ttf"
+_CAMPO_LARG = 888
+_PUSH = 1.045
+_TRACK = -0.045
+_FCACHE = {}
+
+
+def _fonte(fs):
+    if fs not in _FCACHE:
+        f = _IF.truetype(str(_GEIST), fs)
+        try:
+            f.set_variation_by_axes([800])
+        except Exception:
+            pass
+        _FCACHE[fs] = f
+    return _FCACHE[fs]
+
+
+def _larg(txt, fs):
+    """Largura em px com o tracking negativo aplicado."""
+    c = _fonte(fs).getbbox(txt)
+    return (c[2] - c[0]) + _TRACK * fs * len(txt)
+
+
+def _quebrar(txt, fs, wmax):
+    """Quebra por palavra, como o CSS faz."""
+    linhas, atual = [], ""
+    for p in txt.split():
+        teste = (atual + " " + p).strip()
+        if _larg(teste, fs) <= wmax or not atual:
+            atual = teste
+        else:
+            linhas.append(atual)
+            atual = p
+    if atual:
+        linhas.append(atual)
+    return linhas
+
+
+def _big_geometria(txt, fs_pedido):
+    """Reduz a fonte ate caber e devolve (fonte, linhas, altura_da_caixa)."""
+    fs = int(fs_pedido)
+    while fs > 36:
+        linhas = _quebrar(txt, fs, _CAMPO_LARG / _PUSH)
+        if all(_larg(l, fs) * _PUSH <= _CAMPO_LARG for l in linhas):
+            return fs, linhas, int(fs * 0.86 * len(linhas)) + 34
+        fs -= 2
+    linhas = _quebrar(txt, 36, _CAMPO_LARG / _PUSH)
+    return 36, linhas, int(36 * 0.86 * len(linhas)) + 34
+
+WORK = Path(__file__).resolve().parent
+SEED = 4821
+CTA_HOLD = 3.0
+
+# ---- palette
+BG = "#060E13"
+BG2 = "#0C1A22"
+INK = "#F2F7F9"
+DIM = "#7C97A3"
+ACCENT = "#20F0F0"
+ACCENT2 = "#FFB86B"
+GRID = "rgba(120,180,200,0.05)"
+LINE = "rgba(140,200,220,0.22)"
+
+# ---- zones: nothing crosses these lines
+FIELD_TOP, FIELD_BOT = 300, 1320
+CAP_TOP, CAP_BOT = 1352, 1548
+CAP_CY = (CAP_TOP + CAP_BOT) // 2
+
+
+# ---------------------------------------------------------------- data
+def load():
+    words = json.loads((WORK / "words-reviewed.json").read_text(encoding="utf-8"))
+    edl = json.loads((WORK / "edl.json").read_text(encoding="utf-8"))
+    return words, float(edl["voice_duration"]), []
+
+
+def load_beats():
+    p = WORK / "beats.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def timer(words):
+    def at(spec, default=0.0):
+        if spec is None:
+            return default
+        if isinstance(spec, (int, float)):
+            return float(spec)
+        token = rk.plain(str(spec[0]))
+        after = float(spec[1]) if len(spec) > 1 and spec[1] is not None else 0.0
+        for w in words:
+            if rk.plain(w["word"]) == token:
+                return round(w["start"] + after, 3)
+        return default
+    return at
+
+
+# ---------------------------------------------------------------- media
+def card_img(src, name, width=1000):
+    p = Path(src) if os.path.isabs(src) else (WORK / src)
+    if not p.exists():
+        for base in (WORK / "assets", WORK / "composition/assets"):
+            hit = list(base.rglob(Path(src).name))
+            if hit:
+                p = hit[0]
+                break
+        else:
+            raise FileNotFoundError(f"card nao encontrado: {src}")
+    im = Image.open(p).convert("RGB")
+    w, h = im.size
+    t = 4 / 5
+    if w / h > t:
+        nw = int(h * t)
+        im = im.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+    else:
+        nh = int(w / t)
+        top = max(0, int((h - nh) * 0.3))
+        im = im.crop((0, top, w, top + nh))
+    im = im.resize((width, int(width / t)), Image.LANCZOS).convert("L").convert("RGB")
+    out = WORK / "composition/assets/con" / f"{name}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    im.save(out, quality=88)
+    return f"con/{out.name}", im.size
+
+
+# ---------------------------------------------------------------- page
+CSS = """
+@font-face{font-family:G;src:url('assets/Geist-VF.ttf');font-weight:100 900;font-display:block}
+@font-face{font-family:M;src:url('assets/JetBrainsMono-VF.ttf');font-weight:100 900;font-display:block}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1080px;height:1920px;overflow:hidden;background:__BG__}
+#stage{position:absolute;inset:0;width:1080px;height:1920px;
+  background:radial-gradient(120% 80% at 50% 20%,__BG2__ 0%,__BG__ 70%);
+  font-family:G;color:__INK__;overflow:hidden}
+#grid{position:absolute;left:0;right:0;top:0;height:1340px;
+  background-image:linear-gradient(__GRID__ 1px,transparent 1px),
+                   linear-gradient(90deg,__GRID__ 1px,transparent 1px);
+  background-size:66px 66px}
+
+/* the element field: everything graphic is clipped to this window */
+#field{position:absolute;left:0;right:0;top:__FT__px;height:__FH__px;overflow:hidden}
+/* cada cena tem o SEU grupo, centrado de forma independente:
+   elemento invisivel nao empurra o visivel para fora do centro */
+#stack{position:absolute;left:0;top:0;right:0;height:100%;z-index:2}
+#plate{position:absolute;left:34px;right:34px;top:24px;bottom:24px;
+  background:rgba(5,14,20,.80);border:2px solid rgba(150,205,225,.16);
+  border-radius:30px;box-shadow:0 30px 90px rgba(0,0,0,.62),
+  inset 0 0 90px rgba(0,0,0,.45);z-index:1;opacity:0;pointer-events:none}
+.grp{position:absolute;left:96px;right:96px;top:0;height:100%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:88px}
+
+/* caption band: its own plate, never behind a graphic */
+#capband{position:absolute;left:48px;right:48px;top:__CT__px;height:__CH__px;
+  background:linear-gradient(180deg,rgba(6,16,22,.0) 0%,rgba(6,16,22,.92) 16%,
+             rgba(6,16,22,.96) 84%,rgba(6,16,22,.0) 100%);
+  border-radius:26px}
+#caprule{position:absolute;left:70px;right:70px;top:__CT__px;height:2px;
+  background:linear-gradient(90deg,transparent,__ACCENT__,transparent);opacity:.5}
+.cap{position:absolute;left:64px;right:64px;top:__CT__px;height:__CH__px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:G;font-weight:700;font-size:62px;line-height:1.14;letter-spacing:-.015em;
+  color:__INK__;text-align:center;opacity:0;text-shadow:0 4px 30px rgba(0,0,0,.9)}
+.cap .w{display:inline-block;opacity:.30;margin-right:.26em}
+.cap .w.on{opacity:1;color:__ACCENT__}
+
+/* cards */
+.card{position:absolute;transform-origin:50% 50%;will-change:transform,opacity}
+.cardstk{position:relative;flex:0 0 auto;transform-origin:50% 50%}
+.cardstk .ph{display:block;width:100%;height:100%;object-fit:cover;
+  transition:none;
+  filter:grayscale(.4) contrast(1.08) brightness(.94)}
+.cardstk .frm{position:absolute;inset:0;border:3px solid rgba(242,247,249,.85);
+  box-shadow:0 0 0 1px rgba(0,0,0,.6),0 24px 56px rgba(0,0,0,.6)}
+.cardstk .tag{position:absolute;left:0;top:-28px;height:28px;padding:0 11px;
+  background:__ACCENT__;color:#04161a;font-family:M;font-weight:700;font-size:17px;
+  letter-spacing:.13em;line-height:28px;white-space:nowrap}
+.card .ph{display:block;width:100%;height:100%;object-fit:cover;
+  filter:grayscale(.4) contrast(1.08) brightness(.94)}
+.card .frm{position:absolute;inset:0;border:3px solid rgba(242,247,249,.85);
+  box-shadow:0 0 0 1px rgba(0,0,0,.6),0 24px 56px rgba(0,0,0,.6)}
+.card .tag{position:absolute;left:0;top:-28px;height:28px;padding:0 11px;
+  background:__ACCENT__;color:#04161a;font-family:M;font-weight:700;font-size:17px;
+  letter-spacing:.13em;line-height:28px;white-space:nowrap}
+
+/* big keyword */
+.big{position:relative;overflow:hidden;font-family:G;font-weight:800;color:__INK__;
+  letter-spacing:-.045em;line-height:.86;text-align:center;
+  text-shadow:0 10px 60px rgba(0,0,0,.9);max-width:100%}
+.big .in{display:inline-block;position:relative;padding-bottom:16px}
+.big .ul{position:absolute;left:0;right:0;bottom:0;height:10px;background:__ACCENT__;
+  transform-origin:0 50%;transform:scaleX(0)}
+
+/* progress / loading */
+.prog{position:relative;width:100%}
+.prog .trk{position:absolute;left:0;right:0;height:76px;background:rgba(242,247,249,.12);
+  border:2px solid rgba(242,247,249,.28)}
+.prog .fil{position:absolute;left:0;top:0;bottom:0;background:__ACCENT__;width:0}
+.prog .pct{position:absolute;right:0;top:-78px;font-family:M;font-weight:700;font-size:64px;
+  color:__ACCENT__;letter-spacing:.02em}
+.prog .lab{position:absolute;left:0;top:-50px;font-family:M;font-size:25px;color:__DIM__;
+  letter-spacing:.14em}
+
+/* AI glyph cards */
+.ai{border:2px solid rgba(242,247,249,.3);background:rgba(12,26,34,.9);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.air{display:flex;gap:40px;align-items:center;justify-content:center;width:100%}
+.ai .nm{font-family:M;font-weight:700;font-size:23px;letter-spacing:.16em;color:__INK__}
+.ai svg{display:block}
+
+/* iceberg */
+.ice{position:relative;width:100%;height:560px}
+.ice .water{position:absolute;left:0;right:0;height:3px;background:__ACCENT__;
+  box-shadow:0 0 22px rgba(32,240,240,.65)}
+.ice .wl{position:absolute;right:0;top:-42px;font-family:M;font-size:21px;color:__ACCENT__;
+  letter-spacing:.16em}
+.ice .below{position:absolute;left:0;right:0;background:rgba(32,240,240,.03)}
+.ice .tip{position:absolute;font-family:M;font-size:20px;color:__DIM__;letter-spacing:.1em}
+.ice .mass{position:absolute;font-family:M;font-size:20px;color:__ACCENT__;letter-spacing:.1em}
+
+/* struck list */
+.list{position:relative;width:100%}
+.list .row{position:absolute;left:0;right:0;height:76px;
+  border-bottom:2px solid rgba(140,200,220,.2)}
+.list .nm{position:absolute;left:16px;top:0;height:76px;line-height:76px;
+  font-family:G;font-weight:650;font-size:44px;color:__INK__;letter-spacing:-.01em}
+.list .strike{position:absolute;left:8px;top:36px;height:5px;background:__ACCENT2__;
+  transform-origin:0 50%;transform:scaleX(0)}
+.list .tick{position:absolute;right:14px;top:18px;width:40px;height:40px;opacity:0}
+.list .tick path{stroke:__ACCENT__;stroke-width:5;fill:none;stroke-linecap:round}
+
+/* counter / label */
+.panel{position:relative;width:100%;border:2px solid rgba(140,200,220,.35);
+  background:rgba(10,22,30,.72);padding:38px 40px 34px}
+.panel .phead{font-family:M;font-weight:700;font-size:22px;letter-spacing:.18em;
+  color:__ACCENT__;margin-bottom:22px}
+.panel .pbody{display:flex;flex-direction:column;gap:16px}
+.panel .prow{display:flex;align-items:baseline;gap:14px}
+.panel .pb{font-family:M;font-weight:700;font-size:30px;color:__ACCENT__;min-width:34px}
+.panel .pt{font-family:G;font-weight:600;font-size:36px;color:__INK__;line-height:1.2}
+.counter{position:absolute;font-family:M;font-weight:700;color:__ACCENT__;letter-spacing:-.02em;
+  text-shadow:0 0 34px rgba(32,240,240,.4)}
+.nlabel{position:absolute;font-family:M;font-size:20px;color:__DIM__;letter-spacing:.12em;
+  white-space:nowrap}
+svg.art{position:absolute;left:0;top:0;width:100%;height:100%;overflow:visible}
+svg.art .ln{stroke:__ACCENT__;stroke-width:2.4;fill:none}
+svg.art .ax{stroke:rgba(140,200,220,.45);stroke-width:1.6}
+svg.art path{stroke:__ACCENT__;stroke-width:3;fill:none}
+svg.art circle{fill:none;stroke:__ACCENT__;stroke-width:2.4}
+svg.art .ax{stroke:rgba(140,200,220,.45)}
+
+/* HUD */
+.hud{position:absolute;pointer-events:none}
+.brk{position:absolute;width:48px;height:48px;border:2px solid __LINE__}
+.brk.tl{left:40px;top:__FT__px;border-right:0;border-bottom:0}
+.brk.tr{right:40px;top:__FT__px;border-left:0;border-bottom:0}
+.brk.bl{left:40px;top:__FB__px;border-right:0;border-top:0;margin-top:-48px}
+.brk.br{right:40px;top:__FB__px;border-left:0;border-top:0;margin-top:-48px}
+
+#cta{position:absolute;inset:0;opacity:0}
+#cta .plate{position:absolute;left:100px;right:100px;top:640px;padding:60px 50px;
+  background:rgba(8,18,26,.92);border:2px solid __LINE__}
+#cta .k{font-family:M;font-size:21px;color:__DIM__;letter-spacing:.26em;text-align:center}
+#cta .n{font-family:G;font-weight:800;font-size:100px;letter-spacing:-.045em;
+  text-align:center;margin-top:12px}
+#cta .h{font-family:M;font-weight:700;font-size:32px;color:__ACCENT__;text-align:center;
+  margin-top:6px;letter-spacing:.08em}
+#cta .rule{height:2px;background:__LINE__;margin:32px 0 24px}
+#cta .s{font-family:G;font-weight:600;font-size:29px;color:__INK__;text-align:center;
+  line-height:1.3}
+#ctafb{position:relative;margin:34px auto 0;width:430px;height:96px;border-radius:24px;
+  background:__ACCENT__;color:#060E13;font-family:G;font-weight:800;font-size:42px;
+  opacity:0;transform-origin:50% 50%}
+#ctafb span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+#ctafb-b{opacity:0}
+"""
+for _k, _v in {"__BG2__": BG2, "__BG__": BG, "__INK__": INK, "__DIM__": DIM,
+               "__ACCENT2__": ACCENT2, "__ACCENT__": ACCENT, "__GRID__": GRID,
+               "__LINE__": LINE, "__FT__": str(FIELD_TOP), "__FH__": str(FIELD_BOT - FIELD_TOP),
+               "__FB__": str(FIELD_BOT), "__CT__": str(CAP_TOP),
+               "__CH__": str(CAP_BOT - CAP_TOP)}.items():
+    CSS = CSS.replace(_k, _v)
+
+
+def page(duration, body, caps_html, cta_html, js, keys):
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>console</title>
+<style>{CSS}</style></head>
+<body>
+<main id="stage" data-composition-id="main" data-start="0" data-duration="{duration:0.3}"
+ data-width="1080" data-height="1920" data-fps="30">
+<div id="grid"></div>
+<audio id="master" class="clip" data-start="0" data-duration="{duration:0.3}"
+ data-track-index="100" src="assets/master.wav" data-volume="1"></audio>
+<div class="hud" id="hudbrk" style="opacity:0;inset:0">
+ <div class="brk tl"></div><div class="brk tr"></div>
+ <div class="brk bl"></div><div class="brk br"></div></div>
+{caps_html}
+{body}
+{cta_html}
+</main>
+<script src="assets/gsap.min.js"></script>
+<script>
+const DUR={duration};
+const K={json.dumps(keys)};
+const tl=gsap.timeline({{paused:true}});
+function S(sel,v,t){{tl.set(sel,Object.assign({{}},v),t||0);}}
+function TO(sel,v,t){{return tl.to(sel,Object.assign({{}},v),t||0);}}
+function FT(sel,from,to,t){{return tl.fromTo(sel,Object.assign({{}},from),
+  Object.assign({{}},to),t||0);}}
+window.__timelines=window.__timelines||{{}};
+window.__timelines.main=tl;
+{js}
+window.__ready=true;
+</script>
+</body></html>"""
+
+
+# ---------------------------------------------------------------- build
+def build(track=None, drop_s=0.0):
+    rk.setup_assets(WORK)
+    a = WORK / "composition/assets"
+    for f in ("Geist-VF.ttf", "JetBrainsMono-VF.ttf"):
+        src = Path.home() / ".heditor/assets/fonts" / f
+        if src.exists() and not (a / f).exists():
+            (a / f).write_bytes(src.read_bytes())
+    rk.prepare_voice(WORK)
+
+    words, voice_end, _ = load()
+    at = timer(words)
+    b = load_beats()
+    cta = b.get("cta", {})
+    hold = float(cta.get("hold", CTA_HOLD))
+    duration = round(voice_end + hold, 3)
+
+    layer_html, stack_html, cap_html, js, sound = [], [], [], [], []
+
+    def sfx(t, cat, gain, ctx, length=None):
+        ev = {"time": round(max(0.0, t), 3), "category": cat, "gain_db": gain, "context": ctx}
+        if length:
+            ev["length"] = length
+        sound.append(ev)
+
+    js.append("FT('#hudbrk',{opacity:0},{opacity:1,duration:.5,ease:'power2.out'},0.02);")
+    sfx(0.02, "power_up", -30, "console liga")
+
+    scenes = b.get("scenes", [])
+    starts = [at(s["at"], 0.0) for s in scenes]
+    if starts:
+        assert starts == sorted(starts), "scenes fora de ordem"
+
+    cap_groups = []
+
+    for i, s in enumerate(scenes):
+        t0 = starts[i]
+        t1 = starts[i + 1] if i + 1 < len(starts) else voice_end + 0.12
+
+        # cada cena ganha o seu grupo centrado
+        stack_html.append(f'<div class="grp" id="grp{i}" style="opacity:0">')
+        js.append(f"TO('#grp{i}',{{opacity:1,duration:.18}},{t0:.3f});")
+        js.append(f"TO('#grp{i}',{{opacity:0,duration:.16}},{t1:.3f});")
+        # camera: push-in continuo em toda a cena (dinamismo sem competir com o elemento)
+        _dur = max(0.6, t1 - t0)
+        js.append(f"FT('#grp{i}',{{scale:.965}},{{scale:1.045,duration:{_dur:.2f},"
+                  f"ease:'none'}},{t0:.3f});")
+
+        # ---------- minimizar um elemento em vez de tira-lo da tela
+        for k, mz in enumerate(s.get("minimize", [])):
+            mt_ = max(t0, at(mz.get("at"), t0))
+            alvo = mz.get("target", "big")
+            idx = int(mz.get("index", 0))
+            k_ = float(mz.get("scale", 0.42))
+            h_ = int(mz.get("height", 86))
+            _grp = int(mz.get("scene", i))
+            sel = f"#bw{_grp}-{idx}" if alvo == "big" else f"#{alvo}{_grp}-{idx}"
+            js.append(f"TO('{sel}',{{scale:{k_},height:'{h_}px',opacity:{float(mz.get('opacity', 0.72))},"
+                      f"transformOrigin:'50% 0%',duration:{float(mz.get('dur', 0.6))},"
+                      f"ease:'power3.inOut'}},{mt_:.3f});")
+            sfx(mt_, "whoosh", -34, "elemento minimiza")
+
+        # ---------- cards: na pilha (unificados) ou como camada solta
+        for j, c in enumerate(s.get("cards", [])):
+            cid = f"c{i}-{j}"
+            if c.get("in_stack"):
+                url, (iw, ih) = card_img(c["src"], cid)
+                w = int(c.get("w", 520))
+                h = int(w * ih / iw)
+                ct = max(t0, at(c.get("at", s["at"]), t0))
+                stack_html.append(
+                    f'<div class="cardstk" id="{cid}" style="width:{w}px;height:{h}px;opacity:0">'
+                    f'<img class="ph" src="assets/{url}"><div class="frm"></div>'
+                    f'<div class="tag">{c.get("tag", "")}</div></div>')
+                js.append(f"FT('#{cid}',{{opacity:0,scale:.82}},{{opacity:1,scale:1,"
+                          f"duration:.55,ease:'expo.out'}},{ct:.3f});")
+                # zoom continuo dentro da moldura: a foto respira enquanto esta na tela
+                _zp = max(0.8, t1 - ct)
+                js.append(f"TO('#{cid} .ph',{{scale:1.12,duration:{_zp:.2f},ease:'none'}},{ct:.3f});")
+                mv = c.get("move")
+                if mv:
+                    mt = max(t0, at(mv.get("at"), t0))
+                    k = float(mv.get("scale", 0.5))
+                    js.append(f"TO('#{cid}',{{width:'{int(w * k)}px',height:'{int(h * k)}px',"
+                              f"duration:.6,ease:'power3.inOut'}},{mt:.3f});")
+                    sfx(mt, "whoosh", -32, "foto encolhe")
+                if c.get("exit", True):
+                    ex = at(c.get("exit_at"), t1 - 0.02)
+                    js.append(f"TO('#{cid}',{{opacity:0,scale:.86,duration:.4,"
+                              f"ease:'power2.in'}},{ex:.3f});")
+                sfx(ct, "swipe", -28, "cartao")
+                continue
+            url, (iw, ih) = card_img(c["src"], cid)
+            w = int(c.get("w", 640))
+            h = int(w * ih / iw)
+            x, y = float(c.get("x", 540)), float(c.get("y", 760))
+            rot = float(c.get("rot", 0))
+            ct = max(t0, at(c.get("at", s["at"]), t0))
+            enter = c.get("enter", "scale")
+            off = {"left": (-1200, 0), "right": (1200, 0), "up": (0, -1300),
+                   "down": (0, 1300), "scale": (0, 0)}.get(enter, (0, 0))
+            layer_html.append(
+                f'<div class="card" id="{cid}" style="left:{x - w / 2:.0f}px;'
+                f'top:{y - FIELD_TOP - h / 2:.0f}px;width:{w}px;height:{h}px;opacity:0">'
+                f'<img class="ph" id="{cid}p" src="assets/{url}">'
+                f'<div class="frm"></div><div class="tag">{c.get("tag", "")}</div></div>')
+            js.append(f"FT('#{cid}',{{x:{off[0]},y:{off[1]},rotation:{rot * 3:.2f},"
+                      f"scale:{0.7 if enter == 'scale' else 1.05},opacity:0}},"
+                      f"{{x:0,y:0,rotation:{rot},scale:1,opacity:1,duration:.62,"
+                      f"ease:'expo.out'}},{ct:.3f});")
+            # shrink / reposition later
+            mv = c.get("move")
+            if mv:
+                mt = max(t0, at(mv.get("at"), t0 + 1.0))
+                ns = float(mv.get("scale", 0.45))
+                js.append(f"TO('#{cid}',{{x:{float(mv.get('dx', 0))},y:{float(mv.get('dy', 0))},"
+                          f"scale:{ns},rotation:{float(mv.get('rot', rot))},duration:.62,"
+                          f"ease:'power3.inOut'}},{mt:.3f});")
+                sfx(mt, "whoosh", -32, "foto encolhe")
+            if c.get("exit", True):
+                ex = at(c.get("exit_at"), t1 - 0.02)
+                js.append(f"TO('#{cid}',{{opacity:0,scale:.82,duration:.42,"
+                          f"ease:'power2.in'}},{ex:.3f});")
+            sfx(ct, "swipe", -28, "cartao")
+
+        # ---------- big keyword
+        for k, bw in enumerate(s.get("big", [])):
+            bt = max(t0, at(bw, t0))
+            _txt = str(bw[0]).upper()
+            # fonte e altura saem da MEDICAO real: fonte que nao cabe na largura
+            # e reduzida, e a altura conta as linhas que realmente quebram
+            fs, _linhas_txt, _altura = _big_geometria(_txt, s.get("big_size", 150))
+            stack_html.append(
+                f'<div class="big" id="bw{i}-{k}" style="font-size:{fs}px;'
+                f'height:{_altura}px;opacity:0">'
+                f'<div class="in">{_txt}'
+                f'<div class="ul" id="bwu{i}-{k}"></div></div></div>')
+            js.append(f"FT('#bw{i}-{k}',{{opacity:0,y:34,scale:1.14}},{{opacity:1,y:0,scale:1,"
+                      f"duration:.46,ease:'expo.out'}},{bt:.3f});")
+            js.append(f"TO('#bwu{i}-{k}',{{scaleX:1,duration:.5,ease:'power3.inOut'}},{bt + 0.16:.3f});")
+            # se este big vai MINIMIZAR em vez de sair, nao apagar no fim
+            _minim = any(int(m.get("index", 0)) == k and
+                         int(m.get("scene", i)) == i and m.get("target", "big") == "big"
+                         for m in s.get("minimize", []))
+            if not _minim:
+                js.append(f"TO('#bw{i}-{k}',{{opacity:0,y:-26,duration:.34}},{bt + 1.9:.3f});")
+            sfx(bt, "bass_impact", -29, "palavra chave")
+
+        # ---------- loading / progress
+        for k, pg in enumerate(s.get("progress", [])):
+            pt = max(t0, at(pg.get("at"), t0))
+            stack_html.append(
+                f'<div class="prog" id="pg{i}-{k}" style="opacity:0">'
+                f'<div class="lab">{pg.get("label", "CARREGANDO")}</div>'
+                f'<div class="pct" id="pgp{i}-{k}">0%</div>'
+                f'<div class="trk"><div class="fil" id="pgf{i}-{k}"></div></div></div>')
+            to_pct = int(pg.get("to", 100))
+            dur = float(pg.get("dur", 1.5))
+            js.append(f"TO('#pg{i}-{k}',{{opacity:1,duration:.25}},{pt:.3f});")
+            js.append(f"TO('#pgf{i}-{k}',{{width:'{to_pct}%',duration:{dur},"
+                      f"ease:'power1.inOut'}},{pt:.3f});")
+            js.append(f"tl.to('#pgp{i}-{k}',{{innerText:{to_pct},snap:{{innerText:1}},"
+                      f"duration:{dur},ease:'power1.inOut'}},{pt:.3f});")
+            js.append(f"TO('#pg{i}-{k}',{{opacity:0,duration:.35}},{min(t1 - 0.1, pt + dur + 0.5):.3f});")
+            sfx(pt, "progress_complete", -30, "barra de carregamento", dur)
+
+        # ---------- AI glyph cards
+        for k, ai in enumerate(s.get("ai", [])):
+            ait = max(t0, at(ai.get("at"), t0))
+            n = int(ai.get("n", 2))
+            gap = 40.0
+            cw = float(ai.get("w", 400))
+            total = n * cw + (n - 1) * gap
+            x0 = (1080 - total) / 2
+            y = float(ai.get("y", 640)) - FIELD_TOP
+            names = ai.get("names", ["CLAUDE", "CHATGPT"])
+            stack_html.append('<div class="air">')
+            for q in range(n):
+                gid = f"ai{i}-{k}-{q}"
+                xx = x0 + q * (cw + gap)
+                glyph = _glyph(q)
+                stack_html.append(
+                    f'<div class="ai" id="{gid}" '
+                    f'style="width:{cw:.0f}px;height:{cw * 0.86:.0f}px;opacity:0">'
+                    f'{glyph}<div class="nm">{names[q] if q < len(names) else ""}</div></div>')
+                js.append(f"FT('#{gid}',{{opacity:0,y:44,scale:.88}},{{opacity:1,y:0,scale:1,"
+                          f"duration:.44,ease:'expo.out'}},{ait + q * 0.16:.3f});")
+                js.append(f"TO('#{gid}',{{opacity:0,scale:.92,duration:.32}},"
+                          f"{min(t1 - 0.05, ait + 3.0):.3f});")
+            stack_html.append('</div>')
+            sfx(ait, "pop", -29, "simbolos de IA")
+
+        # ---------- iceberg
+        for k, ic in enumerate(s.get("iceberg", [])):
+            it = max(t0, at(ic.get("at"), t0))
+            IH = 560
+            wy = float(ic.get("wline", 0.42)) * IH if float(ic.get("wline", 0.42)) <= 1 else 0.42 * IH
+            stack_html.append(
+                f'<div class="ice" id="ic{i}-{k}" style="opacity:0">'
+                # the submerged mass
+                f'<svg class="art" viewBox="0 0 888 {IH}">'
+                f'<path id="icb{i}-{k}" d="M444,{wy - 104:.0f} L556,{wy + 34:.0f} '
+                f'L634,{wy + 196:.0f} L522,{wy + 316:.0f} L322,{wy + 288:.0f} '
+                f'L276,{wy + 144:.0f} L368,{wy + 26:.0f} Z" '
+                f'stroke="rgba(32,240,240,.5)" stroke-width="2.4" fill="rgba(32,240,240,.07)"/>'
+                f'<path id="ictp{i}-{k}" d="M444,{wy - 104:.0f} L496,{wy - 30:.0f} '
+                f'L392,{wy - 26:.0f} Z" stroke="{ACCENT}" stroke-width="2.4" '
+                f'fill="rgba(32,240,240,.16)"/>'
+                f'</svg>'
+                f'<div class="below" style="top:{wy:.0f}px;bottom:0"></div>'
+                f'<div class="water" id="icw{i}-{k}" style="top:{wy:.0f}px"></div>'
+                f'<div class="wl" id="icl{i}-{k}" style="top:{wy:.0f}px;right:70px">NIVEL DO MAR</div>'
+                f'<div class="tip" id="ictl{i}-{k}" style="left:70px;top:{wy - 150:.0f}px;opacity:0">'
+                f'O QUE TODOS VEEM</div>'
+                f'<div class="mass" id="icm{i}-{k}" style="left:70px;top:{wy + 250:.0f}px;opacity:0">'
+                f'O QUE ESTA ABAIXO</div>'
+                f'</div>')
+            js.append(f"TO('#ic{i}-{k}',{{opacity:1,duration:0.3}},{it:.3f});")
+            js.append(f"FT('#icw{i}-{k}',{{scaleX:0}},{{scaleX:1,duration:.55,ease:'power3.inOut'}},{it:.3f});")
+            js.append(f"FT('#icb{i}-{k}',{{opacity:0}},{{opacity:1,duration:.7}},{it + 0.25:.3f});")
+            js.append(f"TO('#ictl{i}-{k}',{{opacity:1,duration:0.3}},{it + 0.2:.3f});")
+            js.append(f"TO('#icm{i}-{k}',{{opacity:1,duration:0.3}},{it + 0.8:.3f});")
+            js.append(f"TO('#ic{i}-{k}',{{opacity:0,duration:.4}},{min(t1 - 0.05, it + 4.2):.3f});")
+            sfx(it, "water_splash", -30, "iceberg")
+            sfx(it + 0.8, "sub_drop", -30, "a massa escondida")
+
+        # ---------- struck list
+        for k, ls in enumerate(s.get("list", [])):
+            lt = max(t0, at(ls.get("at"), t0))
+            stack_html.append(f'<div class="list" id="ls{i}-{k}" '
+                              f'style="height:{len(ls.get("items", [])) * 94}px;opacity:0">')
+            for r, item in enumerate(ls.get("items", [])):
+                txt = item if isinstance(item, str) else item[0]
+                yy = r * 94
+                stack_html.append(
+                    f'<div class="row" style="top:{yy}px">'
+                    f'<div class="nm">{txt}</div>'
+                    f'<div class="strike" id="lsk{i}-{k}-{r}"></div>'
+                    f'<svg class="tick" id="lst{i}-{k}-{r}" viewBox="0 0 40 40">'
+                    f'<path pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" '
+                    f'd="M8,21 L17,30 L33,11"/></svg>'
+                    f'</div>')
+                rt = lt + 0.35 + r * 0.45
+                js.append(f"TO('#lsk{i}-{k}-{r}',{{scaleX:1,duration:.5,ease:'power2.out'}},{rt:.3f});")
+                js.append(f"TO('#lst{i}-{k}-{r}',{{opacity:1,duration:.12}},{rt + 0.4:.3f});")
+                js.append(f"TO('#lst{i}-{k}-{r} path',{{strokeDashoffset:0,duration:.3}},{rt + 0.4:.3f});")
+                sfx(rt, "pen_write", -30, "riscando")
+            stack_html.append('</div>')
+            js.append(f"TO('#ls{i}-{k}',{{opacity:1,duration:0.3}},{lt:.3f});")
+            js.append(f"TO('#ls{i}-{k}',{{opacity:0,duration:.35}},{min(t1, lt + 3.4):.3f});")
+
+
+        # ---------- grafico de linha
+        for k, ln in enumerate(s.get("line", [])):
+            lt = max(t0, at(ln.get("at"), t0))
+            H = int(ln.get("h", 300))
+            Wd = 888
+            pts = ln.get("points", [0.2, 0.4, 0.35, 0.62, 0.55, 0.85, 1.0])
+            n = len(pts)
+            coords = []
+            for q, v in enumerate(pts):
+                x = 40 + (Wd - 80) * q / max(1, n - 1)
+                y = H - 40 - (H - 90) * float(v)
+                coords.append((x, y))
+            d = "M" + " L".join(f"{x:.0f},{y:.0f}" for x, y in coords)
+            ticks = "".join(
+                f'<line class="ax" x1="40" y1="{H - 40 - (H - 90) * f:.0f}" x2="{Wd - 40}" '
+                f'y2="{H - 40 - (H - 90) * f:.0f}" opacity=".28"/>'
+                for f in (0.25, 0.5, 0.75, 1.0))
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:{H}px;opacity:0" id="ln{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 {Wd} {H}">'
+                f'{ticks}'
+                f'<line class="ax" x1="40" y1="{H - 40}" x2="{Wd - 40}" y2="{H - 40}" opacity=".55"/>'
+                f'<path id="lnp{i}-{k}" d="{d}" pathLength="1" stroke-dasharray="1" '
+                f'stroke-dashoffset="1" stroke-width="4"/>'
+                + "".join(f'<circle id="lnd{i}-{k}-{q}" cx="{x:.0f}" cy="{y:.0f}" r="7" opacity="0"/>'
+                          for q, (x, y) in enumerate(coords))
+                + f'</svg>'
+                f'<div class="nlabel" id="lnl{i}-{k}" style="left:40px;top:{H - 26}px;opacity:0">'
+                f'{ln.get("label", "")}</div></div>')
+            js.append(f"TO('#ln{i}-{k}',{{opacity:1,duration:.2}},{lt:.3f});")
+            js.append(f"TO('#lnp{i}-{k}',{{strokeDashoffset:0,duration:0.7,ease:'power1.out'}},{lt + 0.05:.3f});")
+            for q in range(n):
+                js.append(f"TO('#lnd{i}-{k}-{q}',{{opacity:1,duration:.1}},{lt + 0.1 + q * (0.7 / n):.3f});")
+            js.append(f"TO('#lnl{i}-{k}',{{opacity:1,duration:.3}},{lt + 0.35:.3f});")
+            sfx(lt, "data_beep", -31, "grafico de linha", 1.1)
+
+        # ---------- medidor / velocimetro
+        for k, gg in enumerate(s.get("gauge", [])):
+            gt = max(t0, at(gg.get("at"), t0))
+            val = max(0.0, min(1.0, float(gg.get("value", 0.7))))
+            RR, HH = 200, 250
+            cx, cy = 444, 215
+            def pt(a):
+                rad = math.pi * (1 + a)
+                return cx + RR * math.cos(rad), cy + RR * math.sin(rad)
+            ax0, ay0 = pt(0.0)
+            ax1, ay1 = pt(1.0)
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:{HH}px;opacity:0" id="gg{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 {HH}">'
+                f'<path d="M{ax0:.0f},{ay0:.0f} A{RR},{RR} 0 0 1 {ax1:.0f},{ay1:.0f}" '
+                f'stroke="rgba(242,247,249,.22)" stroke-width="26" fill="none"/>'
+                f'<path id="ggv{i}-{k}" d="M{ax0:.0f},{ay0:.0f} A{RR},{RR} 0 0 1 {ax1:.0f},{ay1:.0f}" '
+                f'pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" '
+                f'stroke="{ACCENT}" stroke-width="26" fill="none" stroke-linecap="round"/>'
+                f'<line id="ggn{i}-{k}" x1="{cx}" y1="{cy}" x2="{cx}" y2="{cy - RR + 30}" '
+                f'stroke="{ACCENT}" stroke-width="6" stroke-linecap="round"/>'
+                f'<circle cx="{cx}" cy="{cy}" r="12" fill="{ACCENT}"/>'
+                f'</svg>'
+                f'<div class="counter" id="ggt{i}-{k}" style="left:0;right:0;top:{cy + 22}px;'
+                f'text-align:center;font-size:64px;opacity:0">0%</div>'
+                f'<div class="nlabel" id="ggl{i}-{k}" style="left:0;right:0;top:{cy + 100}px;'
+                f'text-align:center;opacity:0">{gg.get("label", "")}</div></div>')
+            ang = -90 + 180 * val
+            js.append(f"TO('#gg{i}-{k}',{{opacity:1,duration:.25}},{gt:.3f});")
+            js.append(f"TO('#ggv{i}-{k}',{{strokeDashoffset:{1 - val:.3f},duration:1.0,"
+                      f"ease:'power2.out'}},{gt + 0.05:.3f});")
+            js.append(f"FT('#ggn{i}-{k}',{{rotation:-90,svgOrigin:'{cx} {cy}'}},"
+                      f"{{rotation:{ang},svgOrigin:'{cx} {cy}',duration:1.0,"
+                      f"ease:'power2.out'}},{gt + 0.05:.3f});")
+            js.append(f"TO('#ggt{i}-{k}',{{opacity:1,duration:.2}},{gt + 0.2:.3f});")
+            js.append(f"tl.to('#ggt{i}-{k}',{{innerText:{int(val * 100)},snap:{{innerText:1}},"
+                      f"duration:1.0,ease:'power2.out'}},{gt + 0.2:.3f});")
+            js.append(f"TO('#ggl{i}-{k}',{{opacity:1,duration:.3}},{gt + 0.4:.3f});")
+            sfx(gt + 0.05, "sonar_ping", -31, "medidor")
+
+        # ---------- funil
+        for k, fn in enumerate(s.get("funnel", [])):
+            ft = max(t0, at(fn.get("at"), t0))
+            stages = fn.get("stages", [["Entrada", 1.0], ["Filtro", 0.55], ["Resto", 0.22]])
+            n = len(stages)
+            SH, GAP = 96, 18
+            total = n * SH + (n - 1) * GAP
+            cx = 444
+            stack_html.append(f'<div style="position:relative;width:100%;height:{total}px;opacity:0" '
+                              f'id="fn{i}-{k}">')
+            for q, st in enumerate(stages):
+                nome, frac = st[0], float(st[1])
+                top_w = 760 * frac
+                bot_w = 760 * (stages[q + 1][1] if q + 1 < n else frac * 0.55)
+                bot_w = float(bot_w)
+                y0 = q * (SH + GAP)
+                y1 = y0 + SH
+                stack_html.append(
+                    f'<svg class="art" style="position:absolute;left:0;top:{y0}px;'
+                    f'width:100%;height:{SH}px" viewBox="0 0 888 {SH}">'
+                    f'<path id="fns{i}-{k}-{q}" d="M{cx - top_w / 2:.0f},0 L{cx + top_w / 2:.0f},0 '
+                    f'L{cx + bot_w / 2:.0f},{SH} L{cx - bot_w / 2:.0f},{SH} Z" '
+                    f'fill="rgba(32,240,240,{.30 - q * 0.07:.2f})" stroke="{ACCENT}" stroke-width="2.4"/>'
+                    f'</svg>'
+                    f'<div class="nlabel" style="left:{cx - top_w / 2 + 16:.0f}px;top:{y0 + 32}px">'
+                    f'{nome}</div>')
+                js.append(f"FT('#fns{i}-{k}-{q}',{{opacity:0,scaleX:.6}},"
+                          f"{{opacity:1,scaleX:1,duration:.4,ease:'expo.out'}},{ft + q * 0.22:.3f});")
+            stack_html.append('</div>')
+            js.append(f"TO('#fn{i}-{k}',{{opacity:1,duration:.2}},{ft:.3f});")
+            sfx(ft, "whoosh", -32, "funil")
+
+        # ---------- balanca
+        for k, bl in enumerate(s.get("balance", [])):
+            bt = max(t0, at(bl.get("at"), t0))
+            tilt = float(bl.get("tilt", 9))
+            cx, cy = 444, 150
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:340px;opacity:0" id="bl{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 340">'
+                f'<line x1="{cx}" y1="60" x2="{cx}" y2="250" stroke="rgba(242,247,249,.4)" stroke-width="5"/>'
+                f'<path d="M{cx - 60},250 L{cx + 60},250 L{cx},290 Z" fill="rgba(242,247,249,.18)" '
+                f'stroke="rgba(242,247,249,.5)" stroke-width="3"/>'
+                f'<g id="blb{i}-{k}" style="transform-origin:{cx}px 60px">'
+                f'<line x1="{cx - 230}" y1="60" x2="{cx + 230}" y2="60" stroke="{ACCENT}" stroke-width="6"/>'
+                f'<line x1="{cx - 230}" y1="60" x2="{cx - 230}" y2="150" stroke="rgba(242,247,249,.5)" stroke-width="3"/>'
+                f'<line x1="{cx + 230}" y1="60" x2="{cx + 230}" y2="150" stroke="rgba(242,247,249,.5)" stroke-width="3"/>'
+                f'<path d="M{cx - 300},150 A70,26 0 0 0 {cx - 160},150 Z" fill="rgba(32,240,240,.2)" '
+                f'stroke="{ACCENT}" stroke-width="2.4"/>'
+                f'<path d="M{cx + 160},150 A70,26 0 0 0 {cx + 300},150 Z" fill="rgba(32,240,240,.2)" '
+                f'stroke="{ACCENT}" stroke-width="2.4"/>'
+                f'<circle cx="{cx}" cy="60" r="11" fill="{ACCENT}"/></g>'
+                f'</svg>'
+                f'<div class="nlabel" style="left:120px;top:210px;text-align:center;width:200px">'
+                f'{bl.get("left", "")}</div>'
+                f'<div class="nlabel" style="left:570px;top:210px;text-align:center;width:200px">'
+                f'{bl.get("right", "")}</div></div>')
+            js.append(f"TO('#bl{i}-{k}',{{opacity:1,duration:.3}},{bt:.3f});")
+            js.append(f"FT('#blb{i}-{k}',{{rotation:0}},{{rotation:{tilt},duration:1.0,"
+                      f"ease:'elastic.out(1,0.5)'}},{bt + 0.2:.3f});")
+            sfx(bt + 0.2, "chair_squeak", -33, "balanca")
+
+        # ---------- engrenagens
+        for k, gr in enumerate(s.get("gears", [])):
+            gtt = max(t0, at(gr.get("at"), t0))
+            cx, cy = 444, 160
+            def gear(x, y, r, teeth, gid, dur, rev):
+                pts = []
+                for q in range(teeth * 2):
+                    a = math.pi * q / teeth
+                    rr = r if q % 2 == 0 else r * 0.78
+                    pts.append(f"{x + rr * math.cos(a):.1f},{y + rr * math.sin(a):.1f}")
+                return (f'<g id="{gid}" style="transform-origin:{x}px {y}px">'
+                        f'<path d="M{" L".join(pts)} Z" fill="rgba(32,240,240,.10)" '
+                        f'stroke="{ACCENT}" stroke-width="2.6"/>'
+                        f'<circle cx="{x}" cy="{y}" r="{r * 0.3:.0f}" stroke="{ACCENT}" '
+                        f'stroke-width="2.6" fill="none"/></g>',
+                        f"TO('#{gid}',{{rotation:{rev * 360},svgOrigin:'{x} {y}',duration:{dur},"
+                        f"ease:'none',repeat:-1}},{gtt:.3f});")
+            g1, j1 = gear(cx - 60, cy, 130, 11, f"gr{i}-{k}-a", 6, 1)
+            g2, j2 = gear(cx + 130, cy + 95, 90, 8, f"gr{i}-{k}-b", 6, -1)
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:330px;opacity:0" id="gr{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 330">{g1}{g2}</svg></div>')
+            js.append(f"TO('#gr{i}-{k}',{{opacity:1,duration:.3}},{gtt:.3f});")
+            js.append(j1); js.append(j2)
+            sfx(gtt, "robot_processing", -32, "engrenagens", 1.4)
+
+        # ---------- relogio / prazo
+        for k, ck in enumerate(s.get("clock", [])):
+            ckt = max(t0, at(ck.get("at"), t0))
+            cx, cy, RR = 444, 170, 150
+            marca = "".join(
+                f'<line x1="{cx + (RR - 16) * math.cos(math.pi * q / 6):.0f}" '
+                f'y1="{cy + (RR - 16) * math.sin(math.pi * q / 6):.0f}" '
+                f'x2="{cx + RR * math.cos(math.pi * q / 6):.0f}" '
+                f'y2="{cy + RR * math.sin(math.pi * q / 6):.0f}" '
+                f'stroke="rgba(242,247,249,.4)" stroke-width="3"/>' for q in range(12))
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:360px;opacity:0" id="ck{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 360">'
+                f'<circle cx="{cx}" cy="{cy}" r="{RR}" stroke="rgba(242,247,249,.35)" '
+                f'stroke-width="4" fill="rgba(12,26,34,.6)"/>{marca}'
+                f'<line id="ckh{i}-{k}" x1="{cx}" y1="{cy}" x2="{cx}" y2="{cy - RR + 40}" '
+                f'stroke="{ACCENT}" stroke-width="7" stroke-linecap="round"/>'
+                f'<circle cx="{cx}" cy="{cy}" r="10" fill="{ACCENT}"/>'
+                f'</svg>'
+                f'<div class="nlabel" id="ckl{i}-{k}" style="left:0;right:0;top:{cy + RR + 26}px;'
+                f'text-align:center;opacity:0">{ck.get("label", "")}</div></div>')
+            voltas = float(ck.get("turns", 1.4))
+            js.append(f"TO('#ck{i}-{k}',{{opacity:1,duration:.3}},{ckt:.3f});")
+            js.append(f"FT('#ckh{i}-{k}',{{rotation:0,svgOrigin:'{cx} {cy}'}},"
+                      f"{{rotation:{voltas * 360},svgOrigin:'{cx} {cy}',duration:1.6,"
+                      f"ease:'power2.inOut'}},{ckt:.3f});")
+            js.append(f"TO('#ckl{i}-{k}',{{opacity:1,duration:.3}},{ckt + 0.5:.3f});")
+            sfx(ckt, "clock_tick", -32, "relogio", 1.6)
+
+        # ---------- checklist com progresso
+        for k, cq in enumerate(s.get("checklist", [])):
+            cqt = max(t0, at(cq.get("at"), t0))
+            itens = cq.get("items", [])
+            n = len(itens)
+            stack_html.append(
+                f'<div style="position:relative;width:100%;opacity:0" id="cq{i}-{k}">'
+                f'<div class="prog" style="margin-bottom:52px">'
+                f'<div class="lab">{cq.get("label", "ETAPAS")}</div>'
+                f'<div class="pct" id="cqp{i}-{k}" style="font-size:44px;top:-58px">0%</div>'
+                f'<div class="trk" style="height:22px">'
+                f'<div class="fil" id="cqf{i}-{k}"></div></div></div>')
+            for q, item in enumerate(itens):
+                nome = item if isinstance(item, str) else item[0]
+                stack_html.append(
+                    f'<div style="position:relative;height:80px;border-bottom:2px solid '
+                    f'rgba(140,200,220,.16)">'
+                    f'<div class="nm" style="position:absolute;left:64px;top:0;height:80px;'
+                    f'line-height:80px;font-family:G;font-weight:650;font-size:42px">{nome}</div>'
+                    f'<svg style="position:absolute;left:6px;top:22px;width:38px;height:38px" '
+                    f'viewBox="0 0 40 40">'
+                    f'<rect x="3" y="3" width="34" height="34" stroke="rgba(242,247,249,.3)" '
+                    f'stroke-width="2.4" fill="none"/>'
+                    f'<path id="cqv{i}-{k}-{q}" d="M9,21 L17,29 L32,11" stroke="{ACCENT}" '
+                    f'stroke-width="4.4" fill="none" stroke-linecap="round" '
+                    f'pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"/></svg>'
+                    f'</div>')
+                tt = cqt + 0.3 + q * 0.42
+                js.append(f"TO('#cqv{i}-{k}-{q}',{{strokeDashoffset:0,duration:.28,"
+                          f"ease:'power2.out'}},{tt:.3f});")
+                js.append(f"tl.to('#cqp{i}-{k}',{{innerText:{int((q + 1) * 100 / n)},"
+                          f"snap:{{innerText:1}},duration:.3}},{tt:.3f});")
+                js.append(f"TO('#cqf{i}-{k}',{{width:'{int((q + 1) * 100 / n)}%',duration:.34,"
+                          f"ease:'power2.out'}},{tt:.3f});")
+                sfx(tt, "mouse_click", -33, "item marcado")
+            stack_html.append('</div>')
+            js.append(f"TO('#cq{i}-{k}',{{opacity:1,duration:.25}},{cqt:.3f});")
+
+
+        # ---------- rede de nos (sistemas conectados)
+        for k, nd in enumerate(s.get("nodes", [])):
+            nt = max(t0, at(nd.get("at"), t0))
+            cx, cy = float(nd.get("x", 444)), float(nd.get("y", 300))
+            rr = float(nd.get("r", 185))
+            n = int(nd.get("n", 8))
+            HH = int(nd.get("h", 560))
+            pts = []
+            for q in range(n):
+                ang = -math.pi / 2 + q * 2 * math.pi / n
+                pts.append((cx + rr * math.cos(ang), cy + rr * 0.74 * math.sin(ang)))
+            seg = []
+            for q in range(n):
+                a1, a2 = pts[q], pts[(q + 1) % n]
+                seg.append(f'<line class="ln" x1="{a1[0]:.0f}" y1="{a1[1]:.0f}" '
+                           f'x2="{a2[0]:.0f}" y2="{a2[1]:.0f}" opacity="0"/>')
+                seg.append(f'<line class="ln" x1="{cx:.0f}" y1="{cy:.0f}" '
+                           f'x2="{a1[0]:.0f}" y2="{a1[1]:.0f}" opacity="0"/>')
+            dots = "".join(
+                f'<circle id="ndd{i}-{k}-{q}" cx="{p_[0]:.0f}" cy="{p_[1]:.0f}" r="9" opacity="0"/>'
+                for q, p_ in enumerate(pts))
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:{HH}px;opacity:0" id="nd{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 {HH}">{seg}'
+                f'<circle cx="{cx:.0f}" cy="{cy:.0f}" r="20" stroke-width="3"/>'
+                f'{dots}</svg></div>')
+            js.append(f"TO('#nd{i}-{k}',{{opacity:1,duration:.2}},{nt:.3f});")
+            js.append(f"TO('#nd{i}-{k} .ln',{{opacity:1,duration:.3,stagger:0.05}},{nt:.3f});")
+            for q in range(n):
+                js.append(f"FT('#ndd{i}-{k}-{q}',{{opacity:0,scale:0,"
+                          f"svgOrigin:'{pts[q][0]:.0f} {pts[q][1]:.0f}'}},"
+                          f"{{opacity:1,scale:1,svgOrigin:'{pts[q][0]:.0f} {pts[q][1]:.0f}',"
+                          f"duration:.3,ease:'back.out(2)'}},{nt + 0.1 + q * 0.07:.3f});")
+            sfx(nt, "data_beep", -30, "rede de sistemas", 0.9)
+
+        # ---------- caixa: moldura com titulo e conteudo (texto ou linhas)
+        for k, pn in enumerate(s.get("panel", [])):
+            pnt = max(t0, at(pn.get("at"), t0))
+            itens = pn.get("items", [])
+            stack_html.append(
+                f'<div class="panel" id="pn{i}-{k}" style="opacity:0">'
+                f'<div class="phead">{pn.get("title", "")}</div>'
+                f'<div class="pbody">' + "".join(
+                    f'<div class="prow" id="pnr{i}-{k}-{q}" style="opacity:0">'
+                    f'<span class="pb">{"" if it[1] is None else it[1]}</span>'
+                    f'<span class="pt">{it[0]}</span></div>'
+                    for q, it in enumerate([(x, None) if isinstance(x, str)
+                                            else (x[0], x[1]) for x in itens]))
+                + '</div></div>')
+            js.append(f"FT('#pn{i}-{k}',{{opacity:0,scale:.9,y:34}},"
+                      f"{{opacity:1,scale:1,y:0,duration:.5,ease:'expo.out'}},{pnt:.3f});")
+            # cada item acende na palavra que o anuncia (o beats manda o 'at'
+            # de cada um); o anterior baixa o brilho quando o proximo entra
+            for q, it in enumerate(itens):
+                _t = (max(pnt, at(it["at"], pnt)) if isinstance(it, dict) and "at" in it
+                      else pnt + 0.19 + q * 1.05)
+                js.append(f"TO('#pnr{i}-{k}-{q}',{{opacity:1,duration:.2}},{_t:.3f});")
+                js.append(f"TO('#pnr{i}-{k}-{q} .pt',{{color:'{INK}',duration:.2}},{_t:.3f});")
+                js.append(f"TO('#pnr{i}-{k}-{q} .pb',"
+                          f"{{textShadow:'0 0 22px {ACCENT}',scale:1.18,duration:.2,"
+                          f"ease:'back.out(3)'}},{_t:.3f});")
+                if q:
+                    js.append(f"TO('#pnr{i}-{k}-{q - 1} .pt',"
+                              f"{{color:'{DIM}',duration:.3}},{_t:.3f});")
+                    js.append(f"TO('#pnr{i}-{k}-{q - 1} .pb',{{textShadow:'none',scale:1,"
+                              f"duration:.3}},{_t:.3f});")
+            sfx(pnt, "page_turn", -31, "caixa de conteudo")
+
+        # ---------- barras
+        for k, bar in enumerate(s.get("bars", [])):
+            bt = max(t0, at(bar.get("at"), t0))
+            for r, item in enumerate(bar.get("items", [])):
+                lab, val = (item[0], float(item[1])) if isinstance(item, (list, tuple)) else (item, 0.7)
+                stack_html.append(
+                    f'<div style="position:relative;width:100%;height:96px;opacity:0" id="br{i}-{k}-{r}">'
+                    f'<div class="nlabel" style="left:0;top:0">{lab}</div>'
+                    f'<div class="counter" id="brv{i}-{k}-{r}" '
+                    f'style="right:0;left:auto;top:-6px;font-size:30px">0%</div>'
+                    f'<div class="trk" style="position:absolute;left:0;right:0;bottom:8px;'
+                    f'height:28px;background:rgba(242,247,249,.10);'
+                    f'border:2px solid rgba(242,247,249,.2)">'
+                    f'<div id="brf{i}-{k}-{r}" style="position:absolute;left:0;top:0;bottom:0;'
+                    f'width:0;background:{ACCENT}"></div></div></div>')
+                tt = bt + 0.1 + r * 0.16
+                js.append(f"TO('#br{i}-{k}-{r}',{{opacity:1,duration:.2}},{tt:.3f});")
+                js.append(f"TO('#brf{i}-{k}-{r}',{{width:'{int(val * 100)}%',duration:.7,"
+                          f"ease:'power3.out'}},{tt:.3f});")
+                js.append(f"tl.to('#brv{i}-{k}-{r}',{{innerText:{int(val * 100)},"
+                          f"snap:{{innerText:1}},duration:.7,ease:'power3.out'}},{tt:.3f});")
+            sfx(bt, "data_beep", -31, "barras")
+
+
+
+        # ---------- simbolo de agente
+        for k, ag in enumerate(s.get("agent", [])):
+            at_ = max(t0, at(ag.get("at"), t0))
+            cx, cy = 444, 250
+            R = 92
+            aneis = "".join(
+                f'<circle id="agr{i}-{k}-{q}" cx="{cx}" cy="{cy}" r="{R + 34 + q * 40}" '
+                f'stroke="rgba(32,240,240,{0.34 - q * 0.09:.2f})" stroke-width="2.4" fill="none"/>'
+                for q in range(3))
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:520px;opacity:0" id="ag{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 520">{aneis}'
+                # corpo do agente: hexagono com antena
+                f'<path d="M{cx},{cy - R} L{cx + R * 0.86:.0f},{cy - R * 0.5:.0f} '
+                f'L{cx + R * 0.86:.0f},{cy + R * 0.5:.0f} L{cx},{cy + R} '
+                f'L{cx - R * 0.86:.0f},{cy + R * 0.5:.0f} L{cx - R * 0.86:.0f},{cy - R * 0.5:.0f} Z" '
+                f'stroke="{ACCENT}" stroke-width="3.4" fill="rgba(32,240,240,.10)"/>'
+                f'<line x1="{cx}" y1="{cy - R}" x2="{cx}" y2="{cy - R - 46}" '
+                f'stroke="{ACCENT}" stroke-width="3.4"/>'
+                f'<circle cx="{cx}" cy="{cy - R - 54}" r="11" fill="{ACCENT}"/>'
+                # olhos
+                f'<circle cx="{cx - 30}" cy="{cy - 8}" r="9" fill="{ACCENT}"/>'
+                f'<circle cx="{cx + 30}" cy="{cy - 8}" r="9" fill="{ACCENT}"/>'
+                f'<path d="M{cx - 34},{cy + 34} Q{cx},{cy + 56} {cx + 34},{cy + 34}" '
+                f'stroke="{ACCENT}" stroke-width="3.4" fill="none"/>'
+                f'</svg>'
+                f'<div class="nlabel" id="agl{i}-{k}" style="left:0;right:0;top:470px;'
+                f'text-align:center;opacity:0">{ag.get("label", "")}</div></div>')
+            js.append(f"FT('#ag{i}-{k}',{{opacity:0,scale:.72}},{{opacity:1,scale:1,"
+                      f"duration:.55,ease:'back.out(1.6)'}},{at_:.3f});")
+            for q in range(3):
+                js.append(f"FT('#agr{i}-{k}-{q}',{{opacity:0,scale:.5,"
+                          f"svgOrigin:'{cx} {cy}'}},{{opacity:1,scale:1,svgOrigin:'{cx} {cy}',"
+                          f"duration:{0.7 + q * 0.25},ease:'power2.out'}},{at_ + q * 0.18:.3f});")
+            js.append(f"TO('#agl{i}-{k}',{{opacity:1,duration:.3}},{at_ + 0.4:.3f});")
+            sfx(at_, "power_up", -30, "agente")
+
+        # ---------- grafo de execucao: agente no centro, atividades em volta
+        for k, gg in enumerate(s.get("agentgraph", [])):
+            gt = max(t0, at(gg.get("at"), t0))
+            HH = int(gg.get("h", 620))
+            cx, cy = 444, HH // 2
+            ativ = gg.get("items", ["Tarefas", "Ferramentas", "Sistemas", "Dados"])
+            n = len(ativ)
+            pos = []
+            for q in range(n):
+                ang = -math.pi / 2 + q * 2 * math.pi / n
+                pos.append((cx + 300 * math.cos(ang), cy + 210 * math.sin(ang)))
+            linhas = "".join(
+                f'<line id="agl{i}-{k}-{q}" class="ln" x1="{cx}" y1="{cy}" '
+                f'x2="{pos[q][0]:.0f}" y2="{pos[q][1]:.0f}" opacity="0"/>'
+                for q in range(n))
+            caixas = "".join(
+                f'<g id="agb{i}-{k}-{q}" opacity="0">'
+                f'<rect x="{pos[q][0] - 128:.0f}" y="{pos[q][1] - 34:.0f}" width="256" height="68" '
+                f'stroke="rgba(32,240,240,.55)" stroke-width="2" fill="rgba(10,22,30,.92)"/>'
+                f'<text x="{pos[q][0]:.0f}" y="{pos[q][1] + 9:.0f}" text-anchor="middle" '
+                f'font-family="M" font-size="25" fill="{INK}" letter-spacing="1">'
+                f'{ativ[q]}</text></g>'
+                for q in range(n))
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:{HH}px;opacity:0" id="agg{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 {HH}">{linhas}{caixas}'
+                f'<circle id="agc{i}-{k}" cx="{cx}" cy="{cy}" r="66" stroke="{ACCENT}" '
+                f'stroke-width="3.4" fill="rgba(32,240,240,.14)" opacity="0"/>'
+                f'<text id="agt{i}-{k}" x="{cx}" y="{cy + 11}" text-anchor="middle" '
+                f'font-family="M" font-size="30" fill="{ACCENT}" letter-spacing="2" opacity="0">'
+                f'AGENTE</text></svg></div>')
+            js.append(f"TO('#agg{i}-{k}',{{opacity:1,duration:.2}},{gt:.3f});")
+            js.append(f"FT('#agc{i}-{k}',{{opacity:0,scale:.5,svgOrigin:'{cx} {cy}'}},"
+                      f"{{opacity:1,scale:1,svgOrigin:'{cx} {cy}',duration:.4,ease:'back.out(2)'}},{gt:.3f});")
+            js.append(f"TO('#agt{i}-{k}',{{opacity:1,duration:.3}},{gt + 0.15:.3f});")
+            for q in range(n):
+                tq = gt + 0.3 + q * 0.26
+                js.append(f"TO('#agl{i}-{k}-{q}',{{opacity:1,duration:.24}},{tq:.3f});")
+                js.append(f"FT('#agb{i}-{k}-{q}',{{opacity:0,scale:.82,"
+                          f"svgOrigin:'{pos[q][0]:.0f} {pos[q][1]:.0f}'}},"
+                          f"{{opacity:1,scale:1,svgOrigin:'{pos[q][0]:.0f} {pos[q][1]:.0f}',"
+                          f"duration:.34,ease:'back.out(2)'}},{tq + 0.12:.3f});")
+                sfx(tq, "data_beep", -33, "atividade ligada")
+
+        # ---------- fluxo de documentos (esteira)
+        for k, fl in enumerate(s.get("flow", [])):
+            ft = max(t0, at(fl.get("at"), t0))
+            etapas = fl.get("items", ["Recebidos", "Interpretados", "Classificados", "Processados"])
+            n = len(etapas)
+            HH = 320
+            step = 750 / max(1, n - 1)
+            stack_html.append(
+                f'<div style="position:relative;width:100%;height:{HH}px;opacity:0" id="fl{i}-{k}">'
+                f'<svg class="art" viewBox="0 0 888 {HH}">'
+                f'<line x1="60" y1="110" x2="828" y2="110" stroke="rgba(140,200,220,.3)" '
+                f'stroke-width="3" stroke-dasharray="10 10" id="fll{i}-{k}"/>')
+            for q, nome in enumerate(etapas):
+                x = 60 + q * step
+                stack_html.append(
+                    f'<g id="fls{i}-{k}-{q}" opacity="0">'
+                    f'<circle cx="{x:.0f}" cy="110" r="26" stroke="{ACCENT}" stroke-width="3" '
+                    f'fill="rgba(10,22,30,1)"/>'
+                    f'<circle cx="{x:.0f}" cy="110" r="9" fill="{ACCENT}"/>'
+                    f'<text x="{x:.0f}" y="186" text-anchor="middle" font-family="M" font-size="21" '
+                    f'fill="{INK}" letter-spacing="1">{nome}</text></g>')
+                js.append(f"FT('#fls{i}-{k}-{q}',{{opacity:0,scale:.4,svgOrigin:'{x:.0f} 110'}},"
+                          f"{{opacity:1,scale:1,svgOrigin:'{x:.0f} 110',duration:.36,"
+                          f"ease:'back.out(2)'}},{ft + q * 0.3:.3f});")
+                if q < n - 1:
+                    x2 = 60 + (q + 1) * step
+                    js.append(f"S('#flm{i}-{k}-{q}',{{opacity:0}});"
+                              .replace("S(", "gsap.set("))
+                    js.append(f"TO('#flm{i}-{k}-{q}',{{opacity:1,duration:.5,ease:'none'}},"
+                              f"{ft + q * 0.3 + 0.15:.3f});")
+                    js.append(f"TO('#flm{i}-{k}-{q}',{{opacity:0,duration:.2}},"
+                              f"{ft + q * 0.3 + 0.75:.3f});")
+            stack_html.append(f'</svg></div>')
+            # pulsos que viajam pela linha
+            pulsos = "".join(
+                f'<circle id="flm{i}-{k}-{q}" cx="0" cy="0" r="10" fill="{ACCENT}" opacity="0"/>'
+                for q in range(n - 1))
+            stack_html.append(f'<svg class="art" viewBox="0 0 888 {HH}" style="pointer-events:none">'
+                              f'{pulsos}</svg>')
+            js.append(f"TO('#fl{i}-{k}',{{opacity:1,duration:.2}},{ft:.3f});")
+            for q in range(n - 1):
+                x1_, x2_ = 60 + q * step, 60 + (q + 1) * step
+                js.append(f"gsap.set('#flm{i}-{k}-{q}',{{attr:{{cx:{x1_:.0f},cy:110}}}});")
+                js.append(f"tl.to('#flm{i}-{k}-{q}',{{attr:{{cx:{x2_:.0f}}},duration:.5,"
+                          f"ease:'power1.inOut'}},{ft + q * 0.3 + 0.15:.3f});")
+            sfx(ft, "whoosh", -32, "fluxo")
+
+
+        # ---------- counter
+        for k, cn in enumerate(s.get("counter", [])):
+            ct2 = max(t0, at(cn.get("at"), t0))
+            cx = float(cn.get("x", 90))
+            cy = float(cn.get("y", 1000)) - FIELD_TOP
+            layer_html.append(f'<div class="counter" id="cnt{i}-{k}" style="left:{cx:.0f}px;'
+                              f'top:{cy:.0f}px;font-size:{cn.get("size", 110)}px;opacity:0">0</div>')
+            layer_html.append(f'<div class="nlabel" id="cnl{i}-{k}" style="left:{cx:.0f}px;'
+                              f'top:{cy + int(cn.get("size", 110)) + 12:.0f}px;opacity:0">'
+                              f'{cn.get("label", "")}</div>')
+            js.append(f"TO('#cnt{i}-{k}',{{opacity:1,duration:.22}},{ct2:.3f});")
+            js.append(f"tl.to('#cnt{i}-{k}',{{innerText:{cn.get('to', 100)},"
+                      f"snap:{{innerText:1}},duration:1.1,ease:'power2.out'}},{ct2:.3f});")
+            js.append(f"TO('#cnl{i}-{k}',{{opacity:1,duration:0.3}},{ct2 + 0.15:.3f});")
+            js.append(f"TO('#cnt{i}-{k},#cnl{i}-{k}',{{opacity:0,duration:.3}},"
+                      f"{min(t1, ct2 + 2.4):.3f});")
+            sfx(ct2, "clock_tick", -31, "contador", 1.1)
+
+        # ---------- free labels
+        for k, lb in enumerate(s.get("labels", [])):
+            lbt = max(t0, at(lb.get("at"), t0))
+            layer_html.append(f'<div class="nlabel" id="lb{i}-{k}" style="left:{lb.get("x", 90)}px;'
+                              f'top:{float(lb.get("y", 1000)) - FIELD_TOP:.0f}px;opacity:0">'
+                              f'{lb.get("text", "")}</div>')
+            js.append(f"TO('#lb{i}-{k}',{{opacity:1,duration:0.3}},{lbt:.3f});")
+            js.append(f"TO('#lb{i}-{k}',{{opacity:0,duration:.3}},{min(t1, lbt + 2.2):.3f});")
+
+        stack_html.append('</div>')   # fecha o grupo da cena
+
+    body = ('<div id="field"><div id="plate"></div>' + "".join(layer_html) +
+            '<div id="stack">' + "".join(stack_html) + '</div></div>')
+
+    # ---------- captions: own band, bigger, never behind graphics
+    if words:
+        groups, cur = [], []
+        for w in words:
+            cur.append(w)
+            txt = " ".join(x["word"] for x in cur)
+            if len(cur) >= 4 or len(txt) > 26 or w["word"].endswith((".", "?", "!")):
+                groups.append(cur)
+                cur = []
+        if cur:
+            groups.append(cur)
+        for gi, g in enumerate(groups):
+            c0 = g[0]["start"]
+            c1 = g[-1]["end"] + 0.1
+            # nunca deixar duas legendas visiveis ao mesmo tempo
+            if gi + 1 < len(groups):
+                c1 = min(c1, groups[gi + 1][0]["start"] - 0.02)
+            else:
+                c1 = min(c1, voice_end)          # a ultima nao pode passar do fim da voz
+                c1 = math.floor(c1 * 1000) / 1000
+            spans = "".join(f'<span class="w" id="cw{gi}-{wi}">{w["word"]}</span>'
+                            for wi, w in enumerate(g))
+            cap_html.append(f'<div class="cap" id="cap{gi}">{spans}</div>')
+            js.append(f"TO('#cap{gi}',{{opacity:1,duration:.1}},{c0:.3f});")
+            js.append(f"TO('#cap{gi}',{{opacity:0,duration:.12}},{c1:.3f});")
+            for wi, w in enumerate(g):
+                ws, we = w["start"], w["end"]
+                js.append(f"TO('#cw{gi}-{wi}',{{opacity:1,duration:.07}},{ws:.3f});")
+                js.append(f"TO('#cw{gi}-{wi}',{{opacity:.3,duration:.1}},{max(ws + 0.05, we):.3f});")
+            cap_groups.append({"start": round(c0, 3), "end": round(c1, 3),
+                               "text": " ".join(x["word"] for x in g),
+                               "words": [{"word": x["word"], "start": x["start"],
+                                          "end": x["end"]} for x in g]})
+
+    # ---------- CTA
+    cta_html = ""
+    if cta:
+        brand = rk.load_brand(WORK)
+        c0 = voice_end
+        cta_html = (f'<div id="cta"><div class="plate">'
+                    f'<div class="k">FLUXIA</div>'
+                    f'<div class="n">{cta.get("label") or brand.get("name", "")}</div>'
+                    f'<div class="h">{cta.get("sub") or brand.get("handle", "")}</div>'
+                    f'<div class="rule"></div>'
+                    f'<div class="s">{cta.get("line1", "")}</div>'
+                    f'<div id="ctafb"><span id="ctafb-a">{brand.get("follow", "Seguir")}</span>'
+                    f'<span id="ctafb-b">{brand.get("following", "Seguindo")}</span></div>'
+                    f'</div></div>')
+        js.append(f"TO('#cta',{{opacity:1,duration:.45}},{c0:.3f});")
+        js.append(f"FT('#cta .plate',{{y:36,opacity:0}},{{y:0,opacity:1,duration:.65,"
+                  f"ease:'expo.out'}},{c0 + 0.08:.3f});")
+        js.append(f"TO('#ctafb',{{opacity:1,duration:.3}},{c0 + 0.55:.3f});")
+        js.append(f"TO('#ctafb',{{scale:.94,duration:.08}},{c0 + 1.05:.3f});")
+        js.append(f"TO('#ctafb',{{scale:1,duration:.14,ease:'back.out(3)'}},{c0 + 1.13:.3f});")
+        js.append(f"S('#ctafb-a',{{opacity:0}},{c0 + 1.10:.3f});")
+        js.append(f"S('#ctafb-b',{{opacity:1}},{c0 + 1.10:.3f});")
+        js.append(f"TO('#ctafb',{{boxShadow:'inset 0 0 0 3px {ACCENT}',"
+                  f"background:'rgba(0,0,0,0)',color:'{ACCENT}',duration:.25}},{c0 + 1.12:.3f});")
+        sfx(c0 + 1.05, "click", -22, "follow tap")
+        sfx(c0 + 1.14, "level_up", -26, "following")
+        sfx(c0 + 0.08, "power_up", -25, "cta")
+
+    # ---------- music
+    mus = b.get("music", {})
+    main = track if track and track not in ("vox", "console", "none") else mus.get("main", "music:597")
+    if isinstance(main, str) and main.startswith("music:"):
+        main = rk.music_path(main)
+    elif isinstance(main, str) and not os.path.isabs(main):
+        main = str((WORK / main).resolve())
+    drop = float(drop_s or mus.get("drop", 0.0))
+    g = float(mus.get("gain_db", -3))
+    music = [{"start": 0.0, "end": voice_end, "mode": "full", "gain_db": g, "track": main,
+              "src": drop, "fade_in": 0.3, "fade_out": 0.06},
+             {"start": voice_end, "end": duration, "mode": "full", "gain_db": g + 4,
+              "track": main, "src": drop + voice_end, "fade_in": 0.05, "fade_out": 0.9}]
+
+    keys = {"voice_end": voice_end, "duration": duration, "seed": SEED,
+            "rigStates": {"hero": {"x": 0, "y": 0, "scale": 1}}, "rig": [[0.0, "hero"]]}
+    for i, st in enumerate(starts):
+        keys[f"scene_{i}"] = round(st, 3)
+
+    js.append("TO('#plate',{opacity:1,duration:.5,ease:0},0.05);")
+    js.append(f"TO('#plate',{{opacity:0,duration:.4}},{voice_end - 0.2:.3f});")
+    markup = page(duration, body,
+                  '<div id="capband"></div><div id="caprule"></div>' + "".join(cap_html),
+                  cta_html, "".join(js), keys)
+    (WORK / "composition/index.html").write_text(markup)
+
+    plan = {"style": "console", "duration": duration, "voice_end": voice_end, "keys": keys,
+            "captions": cap_groups, "sound_events": sorted(sound, key=lambda e: e["time"]),
+            "music": music, "mix": "presence", "duck_open": [],
+            "allowed_numbers": b.get("allowed_numbers", [])}
+    if b.get("max_duration"):
+        plan["max_duration"] = b["max_duration"]
+    (WORK / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2))
+    (WORK / "captions.json").write_text(json.dumps(plan["captions"], ensure_ascii=False, indent=2))
+    return plan
+
+
+def _glyph(q):
+    """Generic AI marks — a spark cluster and a chat spark. Deliberately not brand logos."""
+    if q % 2 == 0:
+        pts = [(50, 14), (64, 40), (92, 44), (71, 65), (77, 93),
+               (50, 79), (23, 93), (29, 65), (8, 44), (36, 40)]
+        d = "M" + " L".join(f"{x},{y}" for x, y in pts) + " Z"
+        return (f'<svg width="96" height="96" viewBox="0 0 100 100">'
+                f'<path d="{d}" fill="none" stroke="{ACCENT}" stroke-width="3.4"/>'
+                f'<circle cx="50" cy="52" r="10" fill="none" stroke="{ACCENT}" stroke-width="3.4"/>'
+                f'</svg>')
+    return (f'<svg width="96" height="96" viewBox="0 0 100 100">'
+            f'<path d="M16,30 h68 v40 h-40 l-16,14 v-14 h-12 Z" fill="none" '
+            f'stroke="{ACCENT}" stroke-width="3.4" stroke-linejoin="round"/>'
+            f'<path d="M50,16 l3.4,10.6 L64,30 l-10.6,3.4 L50,44 l-3.4,-10.6 L36,30 l10.6,-3.4 Z" '
+            f'fill="{ACCENT}" opacity=".85"/></svg>')
+
+
+def sfx_lib():
+    return rk.sfx_library()
