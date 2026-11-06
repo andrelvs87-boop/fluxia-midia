@@ -1,0 +1,369 @@
+{
+ "scenes": [
+  {
+   "at": [
+    "Contador",
+    0
+   ],
+   "cards": [
+    {
+     "src": "assets/fotos/accountant-working-1.jpg",
+     "w": 540,
+     "tag": "OPERADOR",
+     "at": [
+      "Contador",
+      0
+     ],
+     "in_stack": true
+    }
+   ],
+   "big": [
+    [
+     "contador",
+     0.18
+    ]
+   ],
+   "big_size": 168
+  },
+  {
+   "at": [
+    "todo",
+    0
+   ],
+   "cards": [
+    {
+     "src": "assets/fotos/accountant-working-1.jpg",
+     "w": 300,
+     "tag": "OPERADOR",
+     "at": [
+      "todo",
+      0
+     ],
+     "in_stack": true
+    }
+   ],
+   "big": [
+    [
+     "potencial",
+     0
+    ]
+   ],
+   "big_size": 152,
+   "gauge": [
+    {
+     "at": [
+      "todo",
+      0
+     ],
+     "value": 1.0,
+     "label": "POTENCIAL APROVEITADO"
+    }
+   ]
+  },
+  {
+   "at": [
+    "Claude",
+    0
+   ],
+   "ai": [
+    {
+     "at": [
+      "Claude",
+      0
+     ],
+     "w": 380,
+     "n": 2,
+     "names": [
+      "CLAUDE",
+      "CHATGPT"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "Então",
+    0
+   ],
+   "big": [
+    [
+     "superfície",
+     0
+    ]
+   ],
+   "big_size": 138,
+   "iceberg": [
+    {
+     "at": [
+      "olhando",
+      0
+     ],
+     "wline": 0.42
+    }
+   ]
+  },
+  {
+   "at": [
+    "resume",
+    0
+   ],
+   "list": [
+    {
+     "at": [
+      "não",
+      0
+     ],
+     "items": [
+      "conversar com chatbots",
+      "escrever textos",
+      "responder perguntas"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "Estamos",
+    0
+   ],
+   "big": [
+    [
+     "nova fase",
+     0
+    ]
+   ],
+   "big_size": 142,
+   "gears": [
+    {
+     "at": [
+      "nova",
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "at": 18.1,
+   "big": [
+    [
+     "agentes inteligentes",
+     0
+    ]
+   ],
+   "big_size": 118,
+   "agent": [
+    {
+     "at": 18.35,
+     "label": "AGENTE INTELIGENTE"
+    }
+   ]
+  },
+  {
+   "at": [
+    "utilizar",
+    0
+   ],
+   "agentgraph": [
+    {
+     "at": [
+      "tarefas",
+      0
+     ],
+     "h": 620,
+     "items": [
+      "Tarefas",
+      "Ferramentas",
+      "Sistemas",
+      "Dados"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "Imagine",
+    0
+   ],
+   "big": [
+    [
+     "escritório",
+     0
+    ]
+   ],
+   "big_size": 158,
+   "minimize": [
+    {
+     "at": [
+      "recebidos",
+      0
+     ],
+     "target": "big",
+     "index": 0,
+     "scene": 8,
+     "scale": 0.32,
+     "height": 66
+    }
+   ],
+   "flow": [
+    {
+     "at": [
+      "recebidos",
+      0
+     ],
+     "items": [
+      "Recebidos",
+      "Interpretados",
+      "Classificados",
+      "Processados"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "monitoram",
+    0
+   ],
+   "checklist": [
+    {
+     "at": [
+      "monitoram",
+      0
+     ],
+     "label": "O QUE O AGENTE FAZ",
+     "items": [
+      "Monitorar obrigações",
+      "Identificar inconsistências",
+      "Consultar informações",
+      "Executar processos"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "Sem",
+    0
+   ],
+   "line": [
+    {
+     "at": [
+      "depender",
+      0
+     ],
+     "h": 320,
+     "points": [
+      1.0,
+      0.92,
+      0.78,
+      0.55,
+      0.3,
+      0.12
+     ],
+     "label": "TRABALHO MANUAL POR ETAPA"
+    }
+   ]
+  },
+  {
+   "at": [
+    "Percebe",
+    0
+   ],
+   "big": [
+    [
+     "diferença",
+     0
+    ]
+   ],
+   "big_size": 176
+  },
+  {
+   "at": [
+    "coisa",
+    0
+   ],
+   "cards": [
+    {
+     "src": "assets/fotos/hands-typing-laptop-1.jpg",
+     "w": 560,
+     "tag": "AJUDA",
+     "at": [
+      "coisa",
+      0
+     ],
+     "in_stack": true
+    }
+   ]
+  },
+  {
+   "at": [
+    "Outra",
+    0
+   ],
+   "big": [
+    [
+     "operação",
+     0
+    ]
+   ],
+   "big_size": 150,
+   "balance": [
+    {
+     "at": [
+      "construir",
+      0
+     ],
+     "left": "AJUDAR VOCÊ",
+     "right": "OPERAÇÃO QUE TRABALHA",
+     "tilt": 11
+    }
+   ]
+  },
+  {
+   "at": 50.5,
+   "big": [
+    [
+     "talvez",
+     0
+    ]
+   ],
+   "big_size": 186
+  },
+  {
+   "at": [
+    "melhor",
+    0
+   ],
+   "panel": [
+    {
+     "at": [
+      "melhor",
+      0
+     ],
+     "title": "A ESCOLHA",
+     "items": [
+      [
+       "Conversar melhor com a IA",
+       "×"
+      ],
+      [
+       "Construir negócios com ela",
+       "→"
+      ]
+     ]
+    }
+   ]
+  }
+ ],
+ "cta": {
+  "label": "Fluxia",
+  "sub": "@fluuxia",
+  "hold": 3.2,
+  "line1": "A operação não para."
+ },
+ "music": {
+  "main": "music:597",
+  "gain_db": -3
+ },
+ "allowed_numbers": []
+}

@@ -1,0 +1,302 @@
+{
+ "scenes": [
+  {
+   "at": [
+    "Contador",
+    0
+   ],
+   "big": [
+    [
+     "Contador",
+     0.16
+    ]
+   ],
+   "big_size": 168
+  },
+  {
+   "at": [
+    "e-CAC",
+    0.02
+   ],
+   "panel": [
+    {
+     "at": [
+      "e-CAC",
+      0.05
+     ],
+     "title": "O RITUAL DE CADA CLIENTE",
+     "items": [
+      {
+       "text": "Acessar empresa por empresa",
+       "sym": "1",
+       "at": [
+        "acessar",
+        0
+       ]
+      },
+      {
+       "text": "Consultar informações",
+       "sym": "2",
+       "at": [
+        "consultar",
+        0
+       ]
+      },
+      {
+       "text": "Baixar documentos",
+       "sym": "3",
+       "at": [
+        "baixar",
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "dezenas",
+    0
+   ],
+   "big": [
+    [
+     "dezenas ou centenas de vezes",
+     0
+    ]
+   ],
+   "big_size": 96
+  },
+  {
+   "at": [
+    "Agora",
+    0
+   ],
+   "list": [
+    {
+     "at": [
+      "Agora",
+      0.55
+     ],
+     "items": [
+      "Acessar cada empresa",
+      "Repetir tudo manualmente"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "Parece",
+    0
+   ],
+   "big": [
+    [
+     "distante",
+     0.1
+    ]
+   ],
+   "big_size": 152
+  },
+  {
+   "at": [
+    "tecnologias",
+    0
+   ],
+   "nodes": [
+    {
+     "at": [
+      "tecnologias",
+      0.25
+     ],
+     "n": 8
+    }
+   ]
+  },
+  {
+   "at": [
+    "Federal",
+    0
+   ],
+   "big": [
+    [
+     "Receita Federal",
+     0
+    ]
+   ],
+   "big_size": 104
+  },
+  {
+   "at": [
+    "operações",
+    0
+   ],
+   "gears": [
+    {
+     "at": [
+      "operações",
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "interessante",
+    0
+   ],
+   "big": [
+    [
+     "mais interessante",
+     0
+    ]
+   ],
+   "big_size": 118
+  },
+  {
+   "at": [
+    "minutos",
+    0
+   ],
+   "clock": [
+    {
+     "at": [
+      "minutos",
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "at": 27.3,
+   "list": [
+    {
+     "at": 27.75,
+     "items": [
+      "Tarefas repetitivas",
+      "Intervenções manuais"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "liberar",
+    0
+   ],
+   "checklist": [
+    {
+     "at": [
+      "liberar",
+      0
+     ],
+     "label": "O QUE SOBRA PARA A EQUIPE",
+     "items": [
+      "Atividades estratégicas",
+      "Conhecimento contábil"
+     ]
+    }
+   ]
+  },
+  {
+   "at": [
+    "SERPRO",
+    0
+   ],
+   "big": [
+    [
+     "SERPRO",
+     0
+    ]
+   ],
+   "big_size": 186
+  },
+  {
+   "at": [
+    "Integra",
+    0
+   ],
+   "big": [
+    [
+     "Integra Contador",
+     0
+    ]
+   ],
+   "big_size": 104
+  }
+ ],
+ "cta": {
+  "label": "Fluxia",
+  "sub": "@fluuxia",
+  "hold": 4.0,
+  "line1": "Como funciona, no próximo vídeo."
+ },
+ "allowed_numbers": [
+  "0",
+  "1",
+  "2",
+  "3"
+ ],
+ "bgv": [
+  {
+   "src": "assets/cenas/cenas_001.mp4",
+   "start": 0.0,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_002.mp4",
+   "start": 4.1,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_003.mp4",
+   "start": 8.2,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_004.mp4",
+   "start": 12.3,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_005.mp4",
+   "start": 16.4,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_006.mp4",
+   "start": 20.5,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_007.mp4",
+   "start": 24.6,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_008.mp4",
+   "start": 28.7,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_009.mp4",
+   "start": 32.8,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_010.mp4",
+   "start": 36.9,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_011.mp4",
+   "start": 41.0,
+   "dur": 4.1
+  },
+  {
+   "src": "assets/cenas/cenas_012.mp4",
+   "start": 45.1,
+   "dur": 0.9
+  }
+ ]
+}
